@@ -50,7 +50,7 @@ app.get("/", (req, res) => {
 
 // Register user (create a new record in the userprofile table)
 app.post("/api/createAccount", async (req, res) => {
-  const { username, email, password } = req.body;
+  const { email, password } = req.body;
 
   try {
     console.log("Attempting to create account for:", email);
@@ -80,7 +80,7 @@ app.post("/api/createAccount", async (req, res) => {
     // Add new user
     const { data: newUser, error } = await supabase
       .from("userprofile")
-      .insert({ username, email, password: hashedPassword })
+      .insert({ email, password: hashedPassword })
       .select()
       .single();
 
@@ -89,10 +89,15 @@ app.post("/api/createAccount", async (req, res) => {
       throw error;
     }
 
+    if (!newUser) {
+      throw new Error("User created but not returned from database");
+    }
+
     console.log("New user created successfully:", newUser.email);
 
     // Generate JWT token
     const token = jwt.sign({ id: newUser.id, email }, JWT_SECRET, {
+      //from where is it getting the id???
       expiresIn: "1d",
     });
 
@@ -146,6 +151,39 @@ app.post("/api/signIn", async (req, res) => {
   }
 });
 
+app.post("/api/updateUsername", async (req, res) => {
+  const { newUsername } = req.body;
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({ message: "No token provided" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    // Verify the token
+    const decoded = jwt.verify(token, JWT_SECRET);
+
+    // The email is available in the decoded token
+    const email = decoded.email;
+
+    // Update the username in the database using email
+    const { data, error } = await supabase
+      .from("userprofile")
+      .update({ username: newUsername })
+      .eq("email", email);
+
+    if (error) throw error;
+
+    return res.status(200).json({ message: "Username updated successfully" });
+  } catch (error) {
+    console.error("Error updating username:", error);
+    res
+      .status(500)
+      .json({ message: "Error updating username", error: error.message });
+  }
+});
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
