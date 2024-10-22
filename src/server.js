@@ -184,6 +184,201 @@ app.post("/api/updateUsername", async (req, res) => {
       .json({ message: "Error updating username", error: error.message });
   }
 });
+
+app.post("/api/userprogressStart", async (req, res) => {
+  const authHeader = req.headers.authorization;
+  console.log("authHeader", authHeader);
+  if (!authHeader) {
+    return res.status(401).json({ message: "user not authenticated" });
+  }
+  // const token = authHeader.split(" ")[1];
+  const parts = authHeader.split(" ");
+  if (parts.length !== 2 || parts[0] !== "Bearer") {
+    return res.status(401).json({
+      message: "Authorization header must be in format: Bearer <token>",
+    });
+  }
+
+  const token = parts[1];
+  if (!token) {
+    return res.status(401).json({ message: "No token provided" });
+  }
+
+  const { taskId } = req.body;
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.id;
+    if (!taskId) {
+      return res.status(400).json({ message: "Task ID is required" });
+    }
+    console.log(
+      "userprogess api called to start the task for userid: " +
+        userId +
+        "for task: " +
+        taskId
+    );
+    const { data: existingProgress, error: checkError } = await supabase
+      .from("userprogress")
+      .select("*")
+      .eq("userid", userId)
+      .eq("taskid", taskId)
+      .single();
+
+    if (checkError && checkError.code !== "PGRST116") {
+      // PGRST116 is the error code for no rows returned
+      throw checkError;
+    }
+
+    if (existingProgress) {
+      return res
+        .status(409)
+        .json({ message: "Progress entry already exists for this task" });
+    }
+
+    const { data, error } = await supabase
+      .from("userprogress")
+      .insert({ taskid: taskId, userid: userId, taskstatus: "InProgress" })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      message: "User progress start saved successfully",
+      data: data,
+    });
+  } catch (error) {
+    res.status(error.status || 500).json({
+      message: "Error updating userProgress",
+      error: error.message,
+    });
+  }
+});
+
+app.post("/api/userprogressNC", async (req, res) => {
+  //not completion of the task
+  //firstly checking the authentication
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ message: "user not authenticated" }); //to be returned or not??
+  }
+  const { taskId, rsn } = req.body; //we are using object destructuring here.. this is same as const taskId = req.body.taskid;
+  if (!taskId || !rsn) {
+    return res
+      .status(400)
+      .json({ message: "required details missing from req body" });
+  }
+  //splitting the authHeader to get the bearer token
+  try {
+    const token = authHeader.split(" ")[1]; //splitting the authtoken to get the token.. also there can be times when we do not have the token
+    const decoded = jwt.verify(token, JWT_SECRET); //sending the signature and the token to check if it has the right user, email and the iat or issues time so checks the expiry too
+    const userId = decoded.id;
+    //first checking if the record exists
+    const { data: existingData, error: checkError } = await supabase
+      .from("userprogress")
+      .select("*")
+      .eq("userid", userId)
+      .eq("taskid", taskId)
+      .single();
+
+    // Better error handling
+    if (checkError && checkError?.code !== "PGRST116") {
+      //this may give null ptr if checkptr isnt present.. so adding optional parameter
+      throw checkError;
+    }
+
+    if (!existingData) {
+      return res.status(404).json({
+        message: "No progress entry found for this task",
+      });
+    }
+    const { data: updateData, error: updateError } = await supabase
+      .from("userprogress")
+      .update({
+        taskstatus: "Not Completed",
+        completion_date: new Date().toISOString(),
+        notcompletionreason: rsn,
+      })
+      .eq("taskid", taskId)
+      .eq("userid", userId)
+      .select()
+      .single();
+
+    if (updateError) {
+      throw updateError;
+    }
+    return res.status(201).json({
+      message: "User progress start saved successfully",
+      data: updateData,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      message: "Error updating userProgress",
+      error: error.message,
+    });
+  }
+});
+
+app.post("/api/userprogressC", async (req, res) => {
+  // completion of the task
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ message: "token header not present" });
+  }
+  const token = authHeader.split(" ")[1];
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    const userId = decoded.id;
+    const { taskId } = req.body;
+    const { data: existingData, error: checkError } = await supabase
+      .from("userprogress")
+      .select("*")
+      .eq("userid", userId)
+      .eq("taskid", taskId)
+      .single();
+
+    if (checkError) {
+      console.log("Check Error:", checkError);
+      return res.status(404).json({
+        message: "Error checking user progress",
+        error: checkError.message,
+      });
+    }
+
+    // If no record exists
+    if (!existingData) {
+      return res.status(404).json({
+        message: "No user progress record found to update",
+      });
+    }
+
+    const { data: updateData, error: updateError } = await supabase
+      .from("userprogress")
+      .update({
+        taskstatus: "Completed",
+        completion_date: new Date().toISOString(),
+      })
+      .eq("taskid", taskId)
+      .eq("userid", userId)
+      .select()
+      .single();
+
+    if (updateError) {
+      throw updateError;
+    }
+    return res.status(201).json({
+      message: "User progress start saved successfully",
+      data: updateData,
+    });
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      message: "Error updating userProgress",
+      error: error.message,
+    });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
