@@ -80,7 +80,11 @@ app.post("/api/createAccount", async (req, res) => {
     // Add new user
     const { data: newUser, error } = await supabase
       .from("userprofile")
-      .insert({ email, password: hashedPassword })
+      .insert({
+        email,
+        password: hashedPassword,
+        created_at: new Date().toISOString(),
+      })
       .select()
       .single();
 
@@ -321,21 +325,55 @@ app.post("/api/userprogressNC", async (req, res) => {
 });
 
 app.post("/api/userprogressC", async (req, res) => {
-  // completion of the task
   const authHeader = req.headers.authorization;
   if (!authHeader) {
     return res.status(401).json({ message: "token header not present" });
   }
   const token = authHeader.split(" ")[1];
+
+  console.log("userprogressC started");
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
     const userId = decoded.id;
-    const { taskId } = req.body;
+    const { phaseId, taskId, nutritiontheory } = req.body;
+
+    console.log("Looking up task details with:", {
+      phaseId,
+      taskId,
+      nutritiontheory,
+    });
+
+    // First, get the taskdetailsid from taskdetails table
+    const { data: taskDetails, error: taskError } = await supabase
+      .from("taskdetails")
+      .select("taskdetailsid")
+      .eq("phaseid", phaseId)
+      .eq("taskid", taskId)
+      .eq("nutritiontheory", nutritiontheory)
+      .single();
+
+    if (taskError || !taskDetails) {
+      console.log("Task Details Error:", taskError);
+      return res.status(404).json({
+        message: "Task details not found",
+        error: taskError?.message,
+      });
+    }
+
+    // Convert taskdetailsid to number to ensure proper type
+    const taskDetailsId = parseInt(taskDetails.taskdetailsid);
+    if (isNaN(taskDetailsId)) {
+      return res.status(400).json({
+        message: "Invalid taskdetailsid",
+      });
+    }
+
+    // Check if there's an existing progress record
     const { data: existingData, error: checkError } = await supabase
       .from("userprogress")
       .select("*")
       .eq("userid", userId)
-      .eq("taskid", taskId)
+      .eq("taskdetailsid", taskDetailsId)
       .single();
 
     if (checkError) {
@@ -348,18 +386,27 @@ app.post("/api/userprogressC", async (req, res) => {
 
     // If no record exists
     if (!existingData) {
-      return res.status(404).json({
-        message: "No user progress record found to update",
+      return res.status(400).json({
+        message: "User progress not present or not started yet",
       });
     }
 
+    // If record exists but is already completed, return error
+    if (existingData.taskstatus !== "In Progress") {
+      return res.status(400).json({
+        message: "Task is already completed",
+        data: existingData,
+      });
+    }
+
+    // Update existing record only if not completed
     const { data: updateData, error: updateError } = await supabase
       .from("userprogress")
       .update({
         taskstatus: "Completed",
         completion_date: new Date().toISOString(),
       })
-      .eq("taskid", taskId)
+      .eq("taskdetailsid", taskDetailsId)
       .eq("userid", userId)
       .select()
       .single();
@@ -367,11 +414,13 @@ app.post("/api/userprogressC", async (req, res) => {
     if (updateError) {
       throw updateError;
     }
-    return res.status(201).json({
-      message: "User progress start saved successfully",
+
+    return res.status(200).json({
+      message: "User progress updated successfully",
       data: updateData,
     });
   } catch (error) {
+    console.error("Error in userprogressC:", error);
     return res.status(error.status || 500).json({
       message: "Error updating userProgress",
       error: error.message,
