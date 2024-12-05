@@ -4,6 +4,7 @@ const dotenv = require("dotenv");
 const { createClient } = require("@supabase/supabase-js");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
+const cookieParser = require("cookie-parser");
 
 dotenv.config();
 
@@ -11,13 +12,16 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 app.use(express.json());
+app.use(cookieParser());
 app.use(
   cors({
-    origin: "https://gritfit-ui.vercel.app",
+    origin: "http://localhost:3000",
+    credentials: true,
   })
 );
 
 const JWT_SECRET = process.env.JWT_SECRET;
+const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_API_KEY = process.env.SUPABASE_API_KEY;
 
@@ -43,9 +47,62 @@ supabase
     throw new Error("Failed to connect to Supabase");
   });
 
+// Helper function to generate tokens
+const generateTokens = (payload) => {
+  const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: "1d" }); // Short-lived access token
+  const refreshToken = jwt.sign(payload, JWT_REFRESH_SECRET, {
+    expiresIn: "30d",
+  }); // Long-lived refresh token
+  return { accessToken, refreshToken };
+};
+
+// Middleware to verify access tokens
+const verifyToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader) {
+    return res.status(401).json({ message: "Authorization header missing" });
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ message: "Invalid or expired token" });
+  }
+};
+
 // Home route
 app.get("/", (req, res) => {
   res.send("Hello, this is the backend connected to Supabase!");
+});
+
+// Refresh token endpoint
+app.post("/api/refreshToken", (req, res) => {
+  const { refreshToken } = req.cookies;
+  if (!refreshToken) {
+    return res.status(401).json({ message: "No refresh token provided" });
+  }
+
+  try {
+    const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
+    const tokens = generateTokens({ id: decoded.userid, email: decoded.email });
+
+    res.cookie("refreshToken", tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+    });
+
+    return res.status(200).json({ accessToken: tokens.accessToken });
+  } catch (error) {
+    return res
+      .status(401)
+      .json({ message: "Invalid or expired refresh token" });
+  }
 });
 
 // Register user (create a new record in the userprofile table)
@@ -100,14 +157,17 @@ app.post("/api/createAccount", async (req, res) => {
     console.log("New user created successfully:", newUser.email);
 
     // Generate JWT token
-    const token = jwt.sign({ id: newUser.id, email }, JWT_SECRET, {
-      //from where is it getting the id???
-      expiresIn: "1d",
+    const tokens = generateTokens({ id: newUser.userid, email });
+    res.cookie("refreshToken", tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
     });
 
-    return res
-      .status(201)
-      .json({ message: "User record added successfully!", token });
+    return res.status(201).json({
+      message: "User created successfully!",
+      token: tokens.accessToken,
+    });
   } catch (error) {
     console.error("Error creating user:", error);
     console.error("Error details:", JSON.stringify(error, null, 2));
@@ -143,34 +203,29 @@ app.post("/api/signIn", async (req, res) => {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-    // Generate JWT token
-    const token = jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, {
-      expiresIn: "1d",
+    // Generate JWT tokens
+    const tokens = generateTokens({ id: user.userid, email: user.email });
+    res.cookie("refreshToken", tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
     });
 
-    return res.status(200).json({ message: "Signed in successfully!", token });
+    return res
+      .status(200)
+      .json({ message: "Signed in successfully!", token: tokens.accessToken });
   } catch (error) {
     console.error("Error signing in:", error);
     res.status(500).json({ message: "Error signing in", error: error.message });
   }
 });
 
-app.post("/api/updateUsername", async (req, res) => {
+app.post("/api/updateUsername", verifyToken, async (req, res) => {
   const { newUsername } = req.body;
-  const authHeader = req.headers.authorization;
-
-  if (!authHeader) {
-    return res.status(401).json({ message: "No token provided" });
-  }
-
-  const token = authHeader.split(" ")[1];
 
   try {
     // Verify the token
-    const decoded = jwt.verify(token, JWT_SECRET);
-
-    // The email is available in the decoded token
-    const email = decoded.email;
+    const email = req.user.email;
 
     // Update the username in the database using email
     const { data, error } = await supabase
@@ -189,32 +244,105 @@ app.post("/api/updateUsername", async (req, res) => {
   }
 });
 
-app.post("/api/userprogressStart", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  console.log("authHeader", authHeader);
-  if (!authHeader) {
-    return res.status(401).json({ message: "user not authenticated" });
-  }
-  // const token = authHeader.split(" ")[1];
-  const parts = authHeader.split(" ");
-  if (parts.length !== 2 || parts[0] !== "Bearer") {
-    return res.status(401).json({
-      message: "Authorization header must be in format: Bearer <token>",
+app.post("/api/getTaskData", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // First, get the taskdetailsid from taskdetails table
+    const { data: taskDetails, error: taskError } = await supabase
+      .from("taskdetails")
+      .select("*");
+    if (taskError || !taskDetails) {
+      console.log("Task Details Error:", taskError);
+      return res.status(404).json({
+        message: "Task details not found",
+        error: taskError?.message,
+      });
+    }
+    // console.log("Task Details: ", taskDetails);
+    let taskDetailIds = [];
+    for (const taskDetail of taskDetails) {
+      taskDetailIds.push(parseInt(taskDetail.taskdetailsid));
+    }
+
+    // Convert taskdetailsid to number to ensure proper type
+    // console.log("Task Details: ", taskDetailIds);
+    // Check if there's an existing progress record
+    // const supauser = supabase.auth.user();
+    // console.log("Authenticated User:", supauser);
+    //first checking if the record exists
+    const { data: progressData, error: checkError } = await supabase
+      .from("userprogress")
+      .select("*")
+      .eq("userid", userId)
+      .in("taskdetailsid", taskDetailIds)
+      .order("created_at", { ascending: false });
+    // Better error handling
+    if (checkError && checkError?.code !== "PGRST116") {
+      //this may give null ptr if checkptr isnt present.. so adding optional parameter
+      throw checkError;
+    }
+
+    if (!progressData) {
+      return res.status(404).json({
+        message: "No progress entry found for this task",
+      });
+    }
+
+    const existingData = Object.values(
+      progressData.reduce((acc, record) => {
+        const key = `${record.taskdetailsid}-${record.phaseid}`;
+        if (!acc[key]) {
+          acc[key] = record; // Take the first (most recent) record per group
+        }
+        return acc;
+      }, {})
+    );
+    const mergedData = taskDetails.map((task) => {
+      // Find the corresponding progress data for the current task
+      const userProgress = existingData.find(
+        (progress) => progress.taskdetailsid === task.taskdetailsid
+      );
+      return {
+        taskid: task.taskid,
+        taskdetailsid: task.taskdetailsid,
+        lastswipedat: userProgress ? userProgress.completion_date : null,
+        phaseid: task.phaseid,
+        taskstatus: userProgress ? userProgress.taskstatus : "Not Started",
+        nutritiontheory: task.nutritiontheory,
+        taskdesc: task.taskdesc,
+      };
+    });
+
+    console.log("User Progress Data: ", mergedData);
+    if (mergedData) {
+      return res.status(201).json({
+        message: "Task Data with user progress track retrieved successfully.",
+        data: mergedData,
+      });
+    } else {
+      return res.status(201).json({
+        message: "Task Data with user progress track retrieved successfully.",
+        data: null,
+      });
+    }
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      message: "Error retrieving the taskData.",
+      error: error.message,
     });
   }
+});
 
-  const token = parts[1];
-  if (!token) {
-    return res.status(401).json({ message: "No token provided" });
-  }
-
-  const { taskId } = req.body;
+app.post("/api/userprogressStart", verifyToken, async (req, res) => {
+  const { phaseId, taskId } = req.body;
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const userId = decoded.id;
-    if (!taskId) {
-      return res.status(400).json({ message: "Task ID is required" });
+    const userId = req.user.id;
+    if (!taskId || !phaseId) {
+      return res
+        .status(400)
+        .json({ message: "Required information is missing." });
     }
     console.log(
       "userprogess api called to start the task for userid: " +
@@ -222,68 +350,124 @@ app.post("/api/userprogressStart", async (req, res) => {
         "for task: " +
         taskId
     );
+    const { data: taskDetails, error: taskError } = await supabase
+      .from("taskdetails")
+      .select("taskdetailsid")
+      .eq("phaseid", phaseId)
+      .eq("taskid", taskId)
+      .single();
+
+    if (taskError || !taskDetails) {
+      console.log("Task Details Error:", taskError);
+      return res.status(404).json({
+        message: "Task details not found",
+        error: taskError?.message,
+      });
+    }
+
+    // Convert taskdetailsid to number to ensure proper type
+    const taskDetailsId = parseInt(taskDetails.taskdetailsid);
+    console.log("Task Details: ", taskDetailsId);
+    if (isNaN(taskDetailsId)) {
+      return res.status(400).json({
+        message: "Invalid taskdetailsid",
+      });
+    }
+
     const { data: existingProgress, error: checkError } = await supabase
       .from("userprogress")
       .select("*")
       .eq("userid", userId)
-      .eq("taskid", taskId)
-      .single();
+      .eq("taskdetailsid", taskDetailsId)
+      .eq("taskstatus", "In Progress");
 
     if (checkError && checkError.code !== "PGRST116") {
       // PGRST116 is the error code for no rows returned
       throw checkError;
     }
 
-    if (existingProgress) {
+    if (existingProgress.length !== 0) {
       return res
         .status(409)
         .json({ message: "Progress entry already exists for this task" });
+    } else {
+      const { data, error } = await supabase
+        .from("userprogress")
+        .insert({
+          taskdetailsid: taskDetailsId,
+          userid: userId,
+          taskstatus: "In Progress",
+          created_at: new Date().toLocaleString(),
+        })
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      res.status(201).json({
+        message: "User progress start saved successfully",
+        data: data,
+      });
     }
-
-    const { data, error } = await supabase
-      .from("userprogress")
-      .insert({ taskid: taskId, userid: userId, taskstatus: "InProgress" })
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    res.status(201).json({
-      message: "User progress start saved successfully",
-      data: data,
-    });
   } catch (error) {
     res.status(error.status || 500).json({
-      message: "Error updating userProgress",
+      message: "Error creating userProgress",
       error: error.message,
     });
   }
 });
 
-app.post("/api/userprogressNC", async (req, res) => {
+app.post("/api/userprogressNC", verifyToken, async (req, res) => {
   //not completion of the task
-  //firstly checking the authentication
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ message: "user not authenticated" }); //to be returned or not??
-  }
-  const { taskId, rsn } = req.body; //we are using object destructuring here.. this is same as const taskId = req.body.taskid;
-  if (!taskId || !rsn) {
+  const { phaseId, taskId, reasonForNonCompletion, failedGoal } = req.body; //we are using object destructuring here.. this is same as const taskId = req.body.taskid;
+  if (!taskId || !reasonForNonCompletion) {
     return res
       .status(400)
       .json({ message: "required details missing from req body" });
   }
   //splitting the authHeader to get the bearer token
   try {
-    const token = authHeader.split(" ")[1]; //splitting the authtoken to get the token.. also there can be times when we do not have the token
-    const decoded = jwt.verify(token, JWT_SECRET); //sending the signature and the token to check if it has the right user, email and the iat or issues time so checks the expiry too
-    const userId = decoded.id;
+    const userId = req.user.id;
+    console.log("Looking up task details with:", {
+      phaseId,
+      taskId,
+    });
+
+    // First, get the taskdetailsid from taskdetails table
+    const { data: taskDetails, error: taskError } = await supabase
+      .from("taskdetails")
+      .select("taskdetailsid")
+      .eq("phaseid", phaseId)
+      .eq("taskid", taskId)
+      .single();
+
+    if (taskError || !taskDetails) {
+      console.log("Task Details Error:", taskError);
+      return res.status(404).json({
+        message: "Task details not found",
+        error: taskError?.message,
+      });
+    }
+
+    // Convert taskdetailsid to number to ensure proper type
+    const taskDetailsId = parseInt(taskDetails.taskdetailsid);
+    console.log("Task Details: ", taskDetailsId);
+    if (isNaN(taskDetailsId)) {
+      return res.status(400).json({
+        message: "Invalid taskdetailsid",
+      });
+    }
+
+    // Check if there's an existing progress record
+    // const supauser = supabase.auth.user();
+    // console.log("Authenticated User:", supauser);
     //first checking if the record exists
     const { data: existingData, error: checkError } = await supabase
       .from("userprogress")
       .select("*")
       .eq("userid", userId)
-      .eq("taskid", taskId)
+      .eq("taskdetailsid", taskDetailsId)
+      .eq("taskstatus", "In Progress")
       .single();
 
     // Better error handling
@@ -297,15 +481,27 @@ app.post("/api/userprogressNC", async (req, res) => {
         message: "No progress entry found for this task",
       });
     }
+    const dataToUpdate = {
+      taskstatus: "Not Completed",
+      completion_date: new Date().toLocaleString(),
+      notcompletionreason: reasonForNonCompletion,
+    };
+
+    // Include failedGoal if phaseId === 3
+    if (phaseId === 3) {
+      if (!failedGoal) {
+        return res.status(400).json({
+          message: "Failed goal is required for phase 3",
+        });
+      }
+      dataToUpdate.whichgoal = failedGoal;
+    }
     const { data: updateData, error: updateError } = await supabase
       .from("userprogress")
-      .update({
-        taskstatus: "Not Completed",
-        completion_date: new Date().toISOString(),
-        notcompletionreason: rsn,
-      })
-      .eq("taskid", taskId)
+      .update(dataToUpdate)
+      .eq("taskdetailsid", taskDetailsId)
       .eq("userid", userId)
+      .eq("taskstatus", "In Progress")
       .select()
       .single();
 
@@ -313,7 +509,7 @@ app.post("/api/userprogressNC", async (req, res) => {
       throw updateError;
     }
     return res.status(201).json({
-      message: "User progress start saved successfully",
+      message: "User progress non completion saved successfully",
       data: updateData,
     });
   } catch (error) {
@@ -324,17 +520,10 @@ app.post("/api/userprogressNC", async (req, res) => {
   }
 });
 
-app.post("/api/userprogressC", async (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) {
-    return res.status(401).json({ message: "token header not present" });
-  }
-  const token = authHeader.split(" ")[1];
-
+app.post("/api/userprogressC", verifyToken, async (req, res) => {
   console.log("userprogressC started");
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    const userId = decoded.id;
+    const userId = req.user.id;
     const { phaseId, taskId, nutritiontheory } = req.body;
 
     console.log("Looking up task details with:", {
@@ -362,6 +551,7 @@ app.post("/api/userprogressC", async (req, res) => {
 
     // Convert taskdetailsid to number to ensure proper type
     const taskDetailsId = parseInt(taskDetails.taskdetailsid);
+    console.log("Task Details: ", taskDetailsId);
     if (isNaN(taskDetailsId)) {
       return res.status(400).json({
         message: "Invalid taskdetailsid",
@@ -369,11 +559,14 @@ app.post("/api/userprogressC", async (req, res) => {
     }
 
     // Check if there's an existing progress record
+    // const supauser = supabase.auth.user();
+    // console.log("Authenticated User:", supauser);
     const { data: existingData, error: checkError } = await supabase
       .from("userprogress")
       .select("*")
       .eq("userid", userId)
       .eq("taskdetailsid", taskDetailsId)
+      .eq("taskstatus", "In Progress")
       .single();
 
     if (checkError) {
@@ -404,10 +597,11 @@ app.post("/api/userprogressC", async (req, res) => {
       .from("userprogress")
       .update({
         taskstatus: "Completed",
-        completion_date: new Date().toISOString(),
+        completion_date: new Date().toLocaleString(),
       })
       .eq("taskdetailsid", taskDetailsId)
       .eq("userid", userId)
+      .eq("taskstatus", "In Progress")
       .select()
       .single();
 
@@ -426,6 +620,12 @@ app.post("/api/userprogressC", async (req, res) => {
       error: error.message,
     });
   }
+});
+
+// Logout endpoint
+app.post("/api/logout", (req, res) => {
+  res.clearCookie("refreshToken");
+  res.status(200).json({ message: "Logged out successfully" });
 });
 
 app.listen(PORT, () => {
