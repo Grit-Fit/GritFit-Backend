@@ -244,6 +244,41 @@ app.post("/api/updateUsername", verifyToken, async (req, res) => {
   }
 });
 
+app.post("/api/getUserProgress", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    //first checking if the record exists
+    const { data: progressData, error: checkError } = await supabase
+      .from("userprogress")
+      .select("*")
+      .eq("userid", userId)
+      .order("created_at", { ascending: false });
+    // Better error handling
+    if (checkError && checkError?.code !== "PGRST116") {
+      //this may give null ptr if checkptr isnt present.. so adding optional parameter
+      throw checkError;
+    }
+
+    if (!progressData) {
+      return res.status(404).json({
+        message: "No progress entry found for this task",
+      });
+    }
+
+    else {
+      return res.status(201).json({
+        message: "User Progress Data retrieved successfully.",
+        data: progressData,
+      });
+    }
+  } catch (error) {
+    return res.status(error.status || 500).json({
+      message: "Error retrieving the taskData.",
+      error: error.message,
+    });
+  }
+});
+
 app.post("/api/getTaskData", verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -321,8 +356,8 @@ app.post("/api/getTaskData", verifyToken, async (req, res) => {
         data: mergedData,
       });
     } else {
-      return res.status(201).json({
-        message: "Task Data with user progress track retrieved successfully.",
+      return res.status(404).json({
+        message: "Failed to retrieve Task Data with user progress track.",
         data: null,
       });
     }
