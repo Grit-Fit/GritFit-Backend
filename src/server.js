@@ -13,9 +13,19 @@ const PORT = process.env.PORT || 5050;
 
 app.use(express.json());
 app.use(cookieParser());
+
+const allowedOrigins = ["https://www.gritfit.site", "http://localhost:3000"];
+
 app.use(
   cors({
-    origin: "http://localhost:3000", 
+    origin: function (origin, callback) {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS Not Allowed"));
+      }
+    },
+    methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
     credentials: true,
   })
 );
