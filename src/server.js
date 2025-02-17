@@ -31,6 +31,8 @@ app.use(
   })
 );
 
+app.options("*", cors());
+
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
