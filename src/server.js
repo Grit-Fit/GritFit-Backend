@@ -14,7 +14,7 @@ const PORT = process.env.PORT || 5050;
 app.use(express.json());
 app.use(cookieParser());
 
-const allowedOrigins = ["https://www.gritfit.site", "http://localhost:3000"];
+const allowedOrigins = ["https://www.gritfit.site","https://gritfit.vercel.app", "http://localhost:3000"];
 
 app.use(
   cors({
