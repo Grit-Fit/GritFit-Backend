@@ -493,7 +493,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       })
       .eq("taskdetailsid", currentTask.taskdetailsid)
       .eq("userid", req.user.id)
-      .eq("taskstatus", "In Progress");
+      // .eq("taskstatus", "In Progress");
 
     if (updateError) {
       console.error("[userprogressNC] Error marking current day Not Completed:", updateError);
