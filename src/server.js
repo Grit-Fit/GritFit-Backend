@@ -367,19 +367,44 @@ app.post("/api/getTaskData", verifyToken, async (req, res) => {
     console.log("[getTaskData] Retrieved user progress data:", userProgress);
 
     // Build a map of existing progress records by taskdetailsid
-    const existingData = userProgress.reduce((acc, record) => {
-      if (!acc[record.taskdetailsid]) {
+// Get current time
+  const now = new Date();
+
+  // Merge user progress records for each task
+  const existingData = userProgress.reduce((acc, record) => {
+    const recordActivation = new Date(record.task_activation_date);
+
+    // If no record exists yet for this task, store the current record.
+    if (!acc[record.taskdetailsid]) {
+      acc[record.taskdetailsid] = record;
+    } else {
+      const storedActivation = new Date(acc[record.taskdetailsid].task_activation_date);
+
+      // Case 1: One record is active and the other is scheduled for the future.
+      if (recordActivation <= now && storedActivation > now) {
+        // Prefer the active record.
         acc[record.taskdetailsid] = record;
-      } else {
+      } else if (recordActivation <= now && storedActivation <= now) {
+        // Case 2: Both records are active.
+        // If one of them is "Not Completed", choose that one.
         if (
           record.taskstatus === "Not Completed" &&
           acc[record.taskdetailsid].taskstatus !== "Not Completed"
         ) {
           acc[record.taskdetailsid] = record;
         }
+      } else if (recordActivation > now && storedActivation > now) {
+        // Case 3: Both records are for the future.
+        // Pick the record with the earlier activation date.
+        if (recordActivation < storedActivation) {
+          acc[record.taskdetailsid] = record;
+        }
       }
-      return acc;
-    }, {});
+      // Otherwise, keep the existing record.
+    }
+    return acc;
+  }, {});
+
     
 
  
