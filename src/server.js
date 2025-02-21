@@ -371,9 +371,19 @@ app.post("/api/getTaskData", verifyToken, async (req, res) => {
 
     // Build a map of existing progress records by taskdetailsid
     const existingData = userProgress.reduce((acc, record) => {
-      if (!acc[record.taskdetailsid]) acc[record.taskdetailsid] = record;
+      if (!acc[record.taskdetailsid]) {
+        acc[record.taskdetailsid] = record;
+      } else {
+        if (
+          record.taskstatus === "Not Completed" &&
+          acc[record.taskdetailsid].taskstatus !== "Not Completed"
+        ) {
+          acc[record.taskdetailsid] = record;
+        }
+      }
       return acc;
     }, {});
+    
 
  
     const mergedData = taskDetails.map(task => {
@@ -501,7 +511,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
     }
 
 
-    const nextDay = new Date(Date.now() + 10 * 60 * 60 * 1000);
+    const nextDay = new Date(Date.now() + 10 * 1000);
 
     const { error: insertError } = await supabase
       .from("userprogress")
