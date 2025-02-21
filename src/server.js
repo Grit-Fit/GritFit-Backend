@@ -371,42 +371,43 @@ app.post("/api/getTaskData", verifyToken, async (req, res) => {
 
     // Build a map of existing progress records by taskdetailsid
 // Get current time
-  const now = new Date();
+const now = new Date();
 
-  // Merge user progress records for each task
-  const existingData = userProgress.reduce((acc, record) => {
-    const recordActivation = new Date(record.task_activation_date);
+const existingData = userProgress.reduce((acc, record) => {
+  const recordActivation = new Date(record.task_activation_date);
 
-    // If no record exists yet for this task, store the current record.
-    if (!acc[record.taskdetailsid]) {
-      acc[record.taskdetailsid] = record;
-    } else {
-      const storedActivation = new Date(acc[record.taskdetailsid].task_activation_date);
+  if (!acc[record.taskdetailsid]) {
+    acc[record.taskdetailsid] = record;
+  } else {
+    const stored = acc[record.taskdetailsid];
+    const storedActivation = new Date(stored.task_activation_date);
 
-      // Case 1: One record is active and the other is scheduled for the future.
-      if (recordActivation <= now && storedActivation > now) {
-        // Prefer the active record.
+    // Check if both records are now "active"
+    const recordIsActive = recordActivation <= now;
+    const storedIsActive = storedActivation <= now;
+
+    if (recordIsActive && storedIsActive) {
+      // Both are active; pick whichever has the *newer* created_at
+      const recordCreated = new Date(record.created_at);
+      const storedCreated = new Date(stored.created_at);
+
+      if (recordCreated > storedCreated) {
         acc[record.taskdetailsid] = record;
-      } else if (recordActivation <= now && storedActivation <= now) {
-        // Case 2: Both records are active.
-        // If one of them is "Not Completed", choose that one.
-        if (
-          record.taskstatus === "Not Completed" &&
-          acc[record.taskdetailsid].taskstatus !== "Not Completed"
-        ) {
-          acc[record.taskdetailsid] = record;
-        }
-      } else if (recordActivation > now && storedActivation > now) {
-        // Case 3: Both records are for the future.
-        // Pick the record with the earlier activation date.
-        if (recordActivation < storedActivation) {
-          acc[record.taskdetailsid] = record;
-        }
       }
-      // Otherwise, keep the existing record.
+    } else if (recordIsActive && !storedIsActive) {
+      // The new record is active, while the stored is still future
+      acc[record.taskdetailsid] = record;
+    } else if (!recordIsActive && storedIsActive) {
+      // The stored record is active, new one is still future -> keep stored
+    } else if (!recordIsActive && !storedIsActive) {
+      // Both are future -> pick the earliest activation date, or do nothing
+      if (recordActivation < storedActivation) {
+        acc[record.taskdetailsid] = record;
+      }
     }
-    return acc;
-  }, {});
+  }
+  return acc;
+}, {});
 
     
 
