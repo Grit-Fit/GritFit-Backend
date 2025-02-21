@@ -369,8 +369,7 @@ app.post("/api/getTaskData", verifyToken, async (req, res) => {
 
     console.log("[getTaskData] Retrieved user progress data:", userProgress);
 
-    // Build a map of existing progress records by taskdetailsid
-// Get current time
+    
 const now = new Date();
 
 const existingData = userProgress.reduce((acc, record) => {
@@ -387,7 +386,7 @@ const existingData = userProgress.reduce((acc, record) => {
     const storedIsActive = storedActivation <= now;
 
     if (recordIsActive && storedIsActive) {
-      // Both are active; pick whichever has the *newer* created_at
+     
       const recordCreated = new Date(record.created_at);
       const storedCreated = new Date(stored.created_at);
 
@@ -395,12 +394,12 @@ const existingData = userProgress.reduce((acc, record) => {
         acc[record.taskdetailsid] = record;
       }
     } else if (recordIsActive && !storedIsActive) {
-      // The new record is active, while the stored is still future
+      
       acc[record.taskdetailsid] = record;
     } else if (!recordIsActive && storedIsActive) {
-      // The stored record is active, new one is still future -> keep stored
+      
     } else if (!recordIsActive && !storedIsActive) {
-      // Both are future -> pick the earliest activation date, or do nothing
+      
       if (recordActivation < storedActivation) {
         acc[record.taskdetailsid] = record;
       }
@@ -409,9 +408,7 @@ const existingData = userProgress.reduce((acc, record) => {
   return acc;
 }, {});
 
-    
 
- 
     const mergedData = taskDetails.map(task => {
       const userTaskProgress = existingData[task.taskdetailsid];
       return {
@@ -537,7 +534,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
     }
 
 
-    const nextDay = new Date(Date.now() + 10 * 1000);
+    const nextDay = new Date(Date.now() + 10 * 60 * 60 * 1000);
 
     const { error: insertError } = await supabase
       .from("userprogress")
