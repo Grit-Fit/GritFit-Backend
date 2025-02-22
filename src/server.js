@@ -304,6 +304,33 @@ app.post("/api/updateUsername", verifyToken, async (req, res) => {
   }
 });
 
+app.get("/api/getUserProfile", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email; // from the JWT via verifyToken
+    const { data, error } = await supabase
+      .from("userprofile")
+      .select("username")
+      .eq("email", email)
+      .single();
+
+    if (error) {
+      console.error("Error fetching user profile:", error);
+      return res.status(500).json({ message: "Failed to fetch user profile" });
+    }
+
+    if (!data) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    // Return the username
+    return res.status(200).json({ username: data.username });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ message: err.message });
+  }
+});
+
+
 
 app.post("/api/getUserProgress", verifyToken, async (req, res) => {
   try {
