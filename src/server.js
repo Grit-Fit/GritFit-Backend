@@ -5,6 +5,8 @@ const { createClient } = require("@supabase/supabase-js");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const cookieParser = require("cookie-parser");
+const pdfRoutes = require("./routes/pdfRoutes.js");
+app.use("/api", pdfRoutes);
 
 dotenv.config();
 
