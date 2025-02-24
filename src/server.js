@@ -115,6 +115,100 @@ app.get("/", (req, res) => {
   res.send("Hello, this is the backend connected to Supabase!");
 });
 
+// 1) getUserNutrition - retrieves user data from DB
+app.get("/api/getUserNutrition", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // from JWT
+    const { data, error } = await supabase
+      .from("user_nutrition")
+      .select("*")
+      .eq("user_id", userId)
+      .single();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ message: "No nutrition data found" });
+    }
+    return res.status(200).json({ data });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2) saveUserNutrition - upsert user input to DB
+app.post("/api/saveUserNutrition", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const {
+      age,
+      gender,
+      weight,
+      weightUnit,
+      height,
+      heightUnit,
+      activity,
+      maintenanceCalories,
+    } = req.body;
+
+    const { error } = await supabase
+      .from("user_nutrition")
+      .upsert([
+        {
+          user_id: userId,
+          age,
+          gender,
+          weight,
+          weight_unit: weightUnit,
+          height,
+          height_unit: heightUnit,
+          activity,
+          maintenance_calories: maintenanceCalories,
+          updated_at: new Date().toISOString(),
+        },
+      ]);
+
+    if (error) throw error;
+    return res.status(200).json({ message: "User nutrition data saved" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3) generatePdf - fill docx -> pdf with docxtemplater (example)
+// app.post("/api/generatePdf", verifyToken, async (req, res) => {
+//   try {
+//     const {
+//       userName,
+//       age,
+//       gender,
+//       weight,
+//       weightUnit,
+//       height,
+//       heightUnit,
+//       activity,
+//       maintenanceCals,
+//       proteinGrams,
+//       carbGrams,
+//       fatGrams,
+//     } = req.body;
+
+//     //  ... docxtemplater logic using "NutritionTemplate.docx"
+//     //  ... convert to PDF
+//     //  ... return PDF as a stream
+//     //  For reference: https://docxtemplater.com/docs/node
+//     //  Example is shown previously in the conversation
+
+//     // set response content type to PDF, attach to res
+//     res.setHeader("Content-Type", "application/pdf");
+//     res.setHeader("Content-Disposition", "attachment; filename=Nutrition101.pdf");
+//     return res.send(pdfBuffer);
+//   } catch (error) {
+//     console.error("Error generating PDF:", error);
+//     return res.status(500).send("Failed to generate PDF");
+//   }
+// });
+
+
 
 app.post("/api/refreshToken", (req, res) => {
   const { refreshToken } = req.cookies;
