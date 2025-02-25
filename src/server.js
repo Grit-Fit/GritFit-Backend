@@ -116,78 +116,56 @@ app.get("/", (req, res) => {
   res.send("Hello, this is the backend connected to Supabase!");
 });
 
+// getUserNutrition
 app.get("/api/getUserNutrition", verifyToken, async (req, res) => {
   try {
-    const userId = req.user.userid; // <-- must match userprofile.userid
+    const userId = req.user.id; // or req.user.userid, depending on your JWT
     const { data, error } = await supabase
       .from("user_nutrition")
       .select("*")
-      .eq("user_id", userId) // user_nutrition.user_id references userprofile.userid
+      .eq("userid", userId) // CHANGED from .eq("user_id", userId)
       .single();
 
-    if (error) {
-      console.error("Error fetching user nutrition:", error);
-      throw error;
-    }
+    if (error) throw error;
     if (!data) {
       return res.status(404).json({ message: "No nutrition data found" });
     }
     return res.status(200).json({ data });
   } catch (err) {
-    console.error("Unexpected error in getUserNutrition:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
+// saveUserNutrition
 app.post("/api/saveUserNutrition", verifyToken, async (req, res) => {
   try {
-    const userId = req.user.userid; // <-- again, references userprofile.userid
-    const {
-      age,
-      gender,
-      weight,
-      weightUnit,
-      height,
-      heightUnit,
-      activity,
-      maintenanceCalories,
-    } = req.body;
+    const userId = req.user.id; // or req.user.userid
+    const { age, gender, weight, weightUnit, height, heightUnit, activity, maintenanceCalories } = req.body;
 
-    // If your DB height column is numeric, 
-    // be sure 'height' is actually a valid numeric, not "6 2".
-    // For example, parse it or store it as text if needed.
-    
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("user_nutrition")
       .upsert([
         {
-          user_id: userId,
+          userid: userId,              // CHANGED from user_id: userId
           age,
           gender,
           weight,
           weight_unit: weightUnit,
-          height, // if "height" is numeric in DB, ensure it's parseable
+          height,
           height_unit: heightUnit,
           activity,
           maintenance_calories: maintenanceCalories,
           updated_at: new Date().toISOString(),
         },
-      ])
-      .select(); // so we can see what was inserted/updated
+      ]);
 
-    if (error) {
-      console.error("Error upserting user nutrition:", error);
-      throw error;
-    }
-    return res.status(200).json({
-      message: "User nutrition data saved",
-      data,
-    });
+    if (error) throw error;
+    return res.status(200).json({ message: "User nutrition data saved" });
   } catch (err) {
-    console.error("Unexpected error in saveUserNutrition:", err);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 
 app.use(express.json());
