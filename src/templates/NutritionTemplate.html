@@ -1,121 +1,93 @@
 <!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Your Personalized Nutrition 101 PDF</title>
-    <style>
-      body {
-        font-family: "Arial", sans-serif;
-        margin: 30px;
-        line-height: 1.5;
-      }
-      h1 {
-        color: #003366;
-        margin-bottom: 1rem;
-      }
-      h2 {
-        color: #333;
-        margin-top: 1.2rem;
-        margin-bottom: 0.8rem;
-      }
-      p {
-        margin-bottom: 1rem;
-      }
-      .highlight {
-        font-weight: bold;
-        color: #d35400;
-      }
-      .section-title {
-        font-weight: bold;
-        font-size: 1.1rem;
-        margin-top: 1rem;
-      }
-      .disclaimer {
-        font-size: 0.9rem;
-        color: #555;
-      }
-    </style>
-  </head>
-  <body>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Your Personalized Nutrition 101 PDF! 🍽️</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background-color: #f7f7f7;
+      margin: 0;
+      padding: 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: auto;
+      background: #fff;
+      padding: 30px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+    h1, h2 {
+      color: #2c3e50;
+    }
+    p {
+      line-height: 1.6;
+    }
+    ul {
+      list-style-type: none;
+      padding-left: 0;
+    }
+    li {
+      margin-bottom: 10px;
+    }
+    .disclaimer {
+      font-size: 0.8em;
+      color: #888;
+      margin-top: 30px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
     <h1>Your Personalized Nutrition 101 PDF! 🍽️</h1>
-
+    <p>Hey <strong>{{userName}}</strong>! 🎉</p>
     <p>
-      Hey <span class="highlight">{{username}}</span>! 🎉
+      Congratulations on taking the first step toward your nutritional journey! Based on the information you provided,
+      here’s a breakdown of your maintenance calories, target calories, macro splits, and some delicious food sources
+      to hit those goals. Let’s dive in!
     </p>
 
+    <h2>Your Maintenance Calories 🏋️‍♂️</h2>
     <p>
-      Congratulations on taking the first step toward your nutritional journey!
-      Based on the information you provided, here’s a breakdown of your
-      maintenance calories, target calories, macro splits, and some delicious
-      food sources to hit those goals. Let’s dive in!
+      To keep your body running like a well-oiled machine, you need about <strong>{{maintenanceCalories}}</strong>
+      calories per day. This is the magic number that keeps you from turning into a couch potato or a gym rat—just the perfect balance!
     </p>
 
-    <h2>1. Your Maintenance Calories 🏋️‍♂️</h2>
-    <p>
-      To keep your body running like a well-oiled machine, you need about
-      <span class="highlight">{{maintenanceCalories}}</span> calories per day.
-      This is the magic number that keeps you from turning into a couch potato
-      or a gym rat—just the perfect balance!
-    </p>
-
-    <h2>2. Your Target Calories 🎯</h2>
-    <p>
-      Depending on your goals, here’s how many calories you should be consuming daily:
-    </p>
+    <h2>Your Target Calories 🎯</h2>
+    <p>Depending on your goals, here’s how many calories you should be consuming daily:</p>
     <ul>
       <li>
-        <strong>Bulk Up:</strong> For muscle gains, aim for
-        <span class="highlight">{{bulkCalories}}</span> calories.
-        Time to unleash your inner beast!
+        <strong>Bulk Up:</strong> For muscle gains, aim for <strong>{{targetCaloriesBulk}}</strong> calories. Time to unleash your inner beast!
       </li>
       <li>
-        <strong>Cut Down:</strong> If you want to shed some extra fluff, target
-        <span class="highlight">{{cutCalories}}</span> calories.
-        Beach body, here you come!
+        <strong>Cut Down:</strong> If you want to shed some extra fluff, target <strong>{{targetCaloriesCut}}</strong> calories. Beach body, here you come!
       </li>
       <li>
-        <strong>Recomp (Maintain):</strong> Just looking to keep things steady?
-        Stick with <span class="highlight">{{maintenanceCalories}}</span>
-        calories. You’re perfect the way you are!
+        <strong>Recomp:</strong> Just looking to keep things steady? Stick with <strong>{{targetCaloriesMaintain}}</strong> calories. You’re perfect the way you are!
       </li>
     </ul>
 
-    <h2>3. Macro Split Breakdown 🍚🥑</h2>
+    <h2>Macro Split Breakdown 🍚🥑</h2>
     <p>
-      Now, let’s get into the nitty-gritty of your macros! Here’s how your
-      calories should be split:
+      Now, let’s get into the nitty-gritty of your macros! Here’s how your calories should be split:
     </p>
     <ul>
-      <li>
-        Protein:
-        <span class="highlight">{{proteinGrams}}</span> grams
-      </li>
-      <li>
-        Carbohydrates:
-        <span class="highlight">{{carbGrams}}</span> grams
-      </li>
-      <li>
-        Fats:
-        <span class="highlight">{{fatGrams}}</span> grams
-      </li>
+      <li><strong>Protein:</strong> <strong>{{proteinGrams}}</strong> grams</li>
+      <li><strong>Carbohydrates:</strong> <strong>{{carbGrams}}</strong> grams</li>
+      <li><strong>Fats:</strong> <strong>{{fatGrams}}</strong> grams</li>
     </ul>
-
     <p>
-      Pro Tip: Hitting your macro goals is like playing Tetris—once you fit all
-      the pieces together, it’s super satisfying!
+      <em>Pro Tip:</em> Hitting your macro goals is like playing Tetris—once you fit all the pieces together, it’s super satisfying!
     </p>
 
     <p>
-      Thanks for choosing our product! We can’t wait to see you get to the next
-      part of your nutritional journey. If you have any questions or need
-      support, don’t hesitate to reach out. 🍽️
+      Thanks for choosing our product! We can’t wait to see you get to the next part of your nutritional journey.
+      If you have any questions or need support, don’t hesitate to reach out. 🍽️
     </p>
 
-    <hr />
     <p class="disclaimer">
-      <strong>Disclaimer:</strong> Always consult a healthcare professional
-      before making significant changes to your diet or exercise routine. We're
-      here for primary education and suggestions, not medical advice!
+      Disclaimer: Always consult a healthcare professional before making significant changes to your diet or exercise routine. We're here for primary education and suggestions, not medical advice!
     </p>
-  </body>
+  </div>
+</body>
 </html>

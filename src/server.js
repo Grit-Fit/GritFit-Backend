@@ -5,6 +5,10 @@ const { createClient } = require("@supabase/supabase-js");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const cookieParser = require("cookie-parser");
+const puppeteer = require("puppeteer");
+const handlebars = require("handlebars");
+const fs = require("fs");
+const path = require("path");
 
 
 dotenv.config();
@@ -171,39 +175,70 @@ app.post("/api/saveUserNutrition", verifyToken, async (req, res) => {
   }
 });
 
-// 3) generatePdf - fill docx -> pdf with docxtemplater (example)
-// app.post("/api/generatePdf", verifyToken, async (req, res) => {
-//   try {
-//     const {
-//       userName,
-//       age,
-//       gender,
-//       weight,
-//       weightUnit,
-//       height,
-//       heightUnit,
-//       activity,
-//       maintenanceCals,
-//       proteinGrams,
-//       carbGrams,
-//       fatGrams,
-//     } = req.body;
 
-//     //  ... docxtemplater logic using "NutritionTemplate.docx"
-//     //  ... convert to PDF
-//     //  ... return PDF as a stream
-//     //  For reference: https://docxtemplater.com/docs/node
-//     //  Example is shown previously in the conversation
+app.use(express.json());
 
-//     // set response content type to PDF, attach to res
-//     res.setHeader("Content-Type", "application/pdf");
-//     res.setHeader("Content-Disposition", "attachment; filename=Nutrition101.pdf");
-//     return res.send(pdfBuffer);
-//   } catch (error) {
-//     console.error("Error generating PDF:", error);
-//     return res.status(500).send("Failed to generate PDF");
-//   }
-// });
+// 1) Endpoint to generate PDF
+app.post("/api/generatePdf", verifyToken, async (req, res) => {
+  try {
+    // 2) Get user data from request body
+    const {
+      userName,
+      maintenanceCalories,
+      targetCaloriesBulk,
+      targetCaloriesCut,
+      targetCaloriesMaintain,
+      proteinGrams,
+      carbGrams,
+      fatGrams,
+    } = req.body;
+
+    // 3) Read the HTML template from disk
+    const templatePath = path.join(__dirname, "templates", "nutritionTemplate.html");
+    const htmlContent = fs.readFileSync(templatePath, "utf8");
+
+    // 4) Compile the template with Handlebars
+    const template = handlebars.compile(htmlContent);
+
+    // 5) Pass the user data to the template
+    const finalHtml = template({
+      userName,
+      maintenanceCalories,
+      targetCaloriesBulk,
+      targetCaloriesCut,
+      targetCaloriesMaintain,
+      proteinGrams,
+      carbGrams,
+      fatGrams,
+    });
+
+    // 6) Launch Puppeteer to convert HTML -> PDF
+    const browser = await puppeteer.launch();
+    const page = await browser.newPage();
+
+    // Load the HTML into Puppeteer
+    await page.setContent(finalHtml, { waitUntil: "networkidle0" });
+
+    // 7) Generate PDF
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+    });
+
+    await browser.close();
+
+    // 8) Send PDF as download
+    res.setHeader("Content-Type", "application/pdf");
+    // "attachment" => download prompt; or "inline" => show in browser
+    res.setHeader("Content-Disposition", "attachment; filename=Nutrition101.pdf");
+    res.send(pdfBuffer);
+
+  } catch (error) {
+    console.error("Error generating PDF:", error);
+    res.status(500).send("Failed to generate PDF");
+  }
+});
+
 
 
 
