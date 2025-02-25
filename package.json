@@ -19,9 +19,11 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.0",
+    "handlebars": "^4.7.8",
     "jsonwebtoken": "^9.0.2",
     "node": "^23.8.0",
-    "node-cron": "^3.0.3"
+    "node-cron": "^3.0.3",
+    "puppeteer": "^24.3.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
