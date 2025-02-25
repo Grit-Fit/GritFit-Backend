@@ -186,7 +186,7 @@ app.post("/api/generatePdf", verifyToken, async (req, res) => {
     } = req.body;
 
     // 3) Read the HTML template from disk
-    const templatePath = path.join(__dirname, "..", "templates", "nutritionTemplate.html");
+    const templatePath = path.join(__dirname,  "nutritionTemplate.html");
     const htmlContent = fs.readFileSync(templatePath, "utf8");
 
     // 4) Compile the template with Handlebars
