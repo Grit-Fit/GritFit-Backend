@@ -5,7 +5,7 @@ const { createClient } = require("@supabase/supabase-js");
 const jwt = require("jsonwebtoken");
 const bcrypt = require("bcrypt");
 const cookieParser = require("cookie-parser");
-const puppeteer = require("puppeteer");
+const pdf = require("html-pdf");
 const handlebars = require("handlebars");
 const fs = require("fs");
 const path = require("path");
@@ -186,7 +186,7 @@ app.post("/api/generatePdf", verifyToken, async (req, res) => {
     } = req.body;
 
     // 3) Read the HTML template from disk
-    const templatePath = path.join(__dirname,  "nutritionTemplate.html");
+    const templatePath = path.join(__dirname, "nutritionTemplate.html");
     const htmlContent = fs.readFileSync(templatePath, "utf8");
 
     // 4) Compile the template with Handlebars
@@ -204,32 +204,29 @@ app.post("/api/generatePdf", verifyToken, async (req, res) => {
       fatGrams,
     });
 
-    // 6) Launch Puppeteer to convert HTML -> PDF
-    const browser = await puppeteer.launch();
-    const page = await browser.newPage();
+    // 6) Create PDF with html-pdf (instead of Puppeteer)
+    //    Make sure you have: npm install html-pdf
+    //    Also ensure wkhtmltopdf is installed on your server.
+    const options = { format: "A4" };
 
-    // Load the HTML into Puppeteer
-    await page.setContent(finalHtml, { waitUntil: "networkidle0" });
+    pdf.create(finalHtml, options).toBuffer((err, buffer) => {
+      if (err) {
+        console.error("Error generating PDF with html-pdf:", err);
+        return res.status(500).send("Failed to generate PDF");
+      }
 
-    // 7) Generate PDF
-    const pdfBuffer = await page.pdf({
-      format: "A4",
-      printBackground: true,
+      // 7) Send PDF as download
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Disposition", 'attachment; filename="Nutrition101.pdf"');
+      return res.send(buffer);
     });
-
-    await browser.close();
-
-    // 8) Send PDF as download
-    res.setHeader("Content-Type", "application/pdf");
-    // "attachment" => download prompt; or "inline" => show in browser
-    res.setHeader("Content-Disposition", "attachment; filename=Nutrition101.pdf");
-    res.send(pdfBuffer);
 
   } catch (error) {
     console.error("Error generating PDF:", error);
     res.status(500).send("Failed to generate PDF");
   }
 });
+
 
 
 
