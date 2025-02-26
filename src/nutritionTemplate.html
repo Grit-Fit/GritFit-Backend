@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <title>Your Personalized Nutrition 101 PDF! 🍽️</title>
-  <style>
+  <!-- <style>
     body {
       font-family: Arial, sans-serif;
       background-color: #f7f7f7;
@@ -35,7 +35,7 @@
       color: #888;
       margin-top: 30px;
     }
-  </style>
+  </style> -->
 </head>
 <body>
   <div class="container">
@@ -46,14 +46,14 @@
       here’s a breakdown of your maintenance calories, target calories, macro splits, and some delicious food sources
       to hit those goals. Let’s dive in!
     </p>
-
-    <h2>Your Maintenance Calories 🏋️‍♂️</h2>
+    <hr>
+    <h2>1. Your Maintenance Calories 🏋️‍♂️</h2>
     <p>
       To keep your body running like a well-oiled machine, you need about <strong>{{maintenanceCalories}}</strong>
       calories per day. This is the magic number that keeps you from turning into a couch potato or a gym rat—just the perfect balance!
     </p>
-
-    <h2>Your Target Calories 🎯</h2>
+    <hr>
+    <h2>2. Your Target Calories 🎯</h2>
     <p>Depending on your goals, here’s how many calories you should be consuming daily:</p>
     <ul>
       <li>
@@ -63,11 +63,11 @@
         <strong>Cut Down:</strong> If you want to shed some extra fluff, target <strong>{{targetCaloriesCut}}</strong> calories. Beach body, here you come!
       </li>
       <li>
-        <strong>Recomp:</strong> Just looking to keep things steady? Stick with <strong>{{targetCaloriesMaintain}}</strong> calories. You’re perfect the way you are!
+        <strong>Recomp:</strong> Just looking to keep things steady? Stick with <strong>{{maintenanceCalories}}</strong> calories. You’re perfect the way you are!
       </li>
     </ul>
-
-    <h2>Macro Split Breakdown 🍚🥑</h2>
+    <hr>
+    <h2>3. Macro Split Breakdown 🍚🥑</h2>
     <p>
       Now, let’s get into the nitty-gritty of your macros! Here’s how your calories should be split:
     </p>
