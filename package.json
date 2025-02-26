@@ -20,6 +20,7 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.0",
     "handlebars": "^4.7.8",
+    "html-pdf": "^3.0.1",
     "jsonwebtoken": "^9.0.2",
     "node": "^23.8.0",
     "node-cron": "^3.0.3",
