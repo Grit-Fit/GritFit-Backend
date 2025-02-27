@@ -9,6 +9,7 @@ const pdf = require("html-pdf");
 const handlebars = require("handlebars");
 const fs = require("fs");
 const path = require("path");
+const nodemailer = require("nodemailer");
 
 
 dotenv.config();
@@ -83,6 +84,158 @@ supabase
     throw new Error("Failed to connect to Supabase");
   });
 
+
+  // Create a Nodemailer transporter using Zoho
+//--------------------------------------------------
+
+const transporter = nodemailer.createTransport({
+  host: process.env.EMAIL_HOST,  
+  port: process.env.EMAIL_PORT,  
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+// Helper to generate 4-digit OTP
+function generate4DigitOTP() {
+  return Math.floor(1000 + Math.random() * 9000).toString();
+}
+
+//--------------------------------------------------
+// 2) /api/sendOtp route (AFTER your other routes)
+//--------------------------------------------------
+app.post("/api/sendOtp", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    // 1) Check if user already exists in userprofile
+    const { data: existingUser, error: selectError } = await supabase
+      .from("userprofile")
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    if (selectError && !selectError.message.includes("0 rows")) {
+      return res.status(500).json({ error: selectError.message });
+    }
+
+    // 2) If user doesn't exist, create new user (hashed password)
+    if (!existingUser) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      const { error: insertError } = await supabase
+        .from("userprofile")
+        .insert({
+          email,
+          password: hashedPassword,
+          is_verified: false,
+          created_at: new Date().toISOString(),
+        });
+      if (insertError) {
+        return res.status(400).json({ error: insertError.message });
+      }
+    } else if (existingUser.is_verified) {
+      // If user is already verified, no need to send OTP
+      return res.status(400).json({ message: "User already verified." });
+    }
+
+    // 3) Generate and store OTP
+    const otp = generate4DigitOTP();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString();
+    const { error: updateError } = await supabase
+      .from("userprofile")
+      .update({
+        otp_code: otp,
+        otp_expires_at: expiresAt,
+        is_verified: false,
+      })
+      .eq("email", email);
+    if (updateError) {
+      return res.status(400).json({ error: updateError.message });
+    }
+
+    // 4) Send email via Nodemailer
+    await transporter.sendMail({
+      from: `"GritFit" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Your 4-digit OTP Code",
+      text: `Your OTP is: ${otp}\nIt expires in 15 minutes.`,
+    });
+
+    return res.status(200).json({ message: "OTP sent to your email." });
+  } catch (error) {
+    console.error("Error in /api/sendOtp:", error);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+//--------------------------------------------------
+// 3) /api/verifyOtp route
+//--------------------------------------------------
+app.post("/api/verifyOtp", async (req, res) => {
+  const { email, otp } = req.body;
+  try {
+    // 1) Check if OTP matches your master test code
+    if (otp === process.env.MASTER_TEST_OTP) {
+      const { error: masterError } = await supabase
+        .from("userprofile")
+        .update({
+          is_verified: true,
+          otp_code: null,
+          otp_expires_at: null,
+        })
+        .eq("email", email);
+
+      if (masterError) {
+        return res.status(400).json({ error: masterError.message });
+      }
+      return res.status(200).json({ message: "User verified (test code)!" });
+    }
+
+    // 2) Fetch user from DB
+    const { data: user, error } = await supabase
+      .from("userprofile")
+      .select("*")
+      .eq("email", email)
+      .single();
+    if (error || !user) {
+      return res.status(400).json({ error: "User not found" });
+    }
+
+    if (user.is_verified) {
+      return res.status(400).json({ error: "User already verified" });
+    }
+
+    // 3) Check OTP correctness & expiry
+    if (user.otp_code !== otp) {
+      return res.status(400).json({ error: "Invalid OTP" });
+    }
+    if (new Date(user.otp_expires_at) < new Date()) {
+      return res.status(400).json({ error: "OTP expired" });
+    }
+
+    // 4) Mark user as verified
+    const { error: verifyError } = await supabase
+      .from("userprofile")
+      .update({
+        is_verified: true,
+        otp_code: null,
+        otp_expires_at: null,
+      })
+      .eq("email", email);
+
+    if (verifyError) {
+      return res.status(400).json({ error: verifyError.message });
+    }
+    return res.status(200).json({ message: "User verified successfully!" });
+  } catch (err) {
+    console.error("Error in /api/verifyOtp:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+  
+// nodemailer
 
 const generateTokens = (payload) => {
   const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: "1d" });
@@ -229,8 +382,6 @@ app.post("/api/generatePdf", verifyToken, async (req, res) => {
 
 
 
-
-
 app.post("/api/refreshToken", (req, res) => {
   const { refreshToken } = req.cookies;
   if (!refreshToken) {
@@ -337,6 +488,10 @@ app.post("/api/signIn", async (req, res) => {
       .eq("email", email);
 
     if (error) throw error;
+
+    if (!user.is_verified) {
+      return res.status(403).json({ message: "Email not verified. Please verify OTP first." }); //email not verified
+    }
 
     if (!users || users.length === 0) {
       return res.status(401).json({ message: "Invalid credentials" });

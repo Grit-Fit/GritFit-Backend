@@ -24,6 +24,7 @@
     "jsonwebtoken": "^9.0.2",
     "node": "^23.8.0",
     "node-cron": "^3.0.3",
+    "nodemailer": "^6.10.0",
     "puppeteer": "^24.3.0"
   },
   "devDependencies": {
