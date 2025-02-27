@@ -10,6 +10,10 @@ const handlebars = require("handlebars");
 const fs = require("fs");
 const path = require("path");
 
+// 13-15
+const nodemailer = require("nodemailer");
+const admin = require("firebase-admin");
+
 dotenv.config();
 
 const app = express();
@@ -92,6 +96,66 @@ const generateTokens = (payload) => {
   return { accessToken, refreshToken };
 };
 
+// 100-160
+const serviceAccount = require("./gritfit-dev-firebase-adminsdk-fbsvc-36b54649e5.json");
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
+// 2) Nodemailer transporter using Zoho SMTP
+const transporter = nodemailer.createTransport({
+  host: "smtp.zoho.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.ZOHO_EMAIL_USER, // e.g. "support@domain.site"
+    pass: process.env.ZOHO_EMAIL_PASS, // Your Zoho SMTP password or app password
+  },
+});
+
+// 3) Route: Register + Send Verification Link
+app.post("/api/register", async (req, res) => {
+  const { email, password } = req.body;
+  try {
+    // a) Create user in Firebase Auth
+    const userRecord = await admin.auth().createUser({
+      email: email,
+      password: password,
+      emailVerified: false, // We'll verify via link
+    });
+
+    // b) Generate a custom verification link
+    const actionCodeSettings = {
+      url: "https://www.gritfit.site/verified", 
+      handleCodeInApp: false, 
+      // or true if you want the link to be opened by the app
+    };
+    const verificationLink = await admin
+      .auth()
+      .generateEmailVerificationLink(email, actionCodeSettings);
+
+    // c) Send the link via Nodemailer
+    const mailOptions = {
+      from: `"GritFit" <${process.env.ZOHO_EMAIL_USER}>`,
+      to: email,
+      subject: "Please verify your email",
+      text: `Click this link to verify your email: ${verificationLink}`,
+    };
+
+    await transporter.sendMail(mailOptions);
+
+    // (Optional) If you're using Supabase for extra data, insert user info there
+    // e.g. supabase.from("users").insert({ firebase_uid: userRecord.uid, email, ... })
+
+    return res.status(200).json({
+      message: "User created! Verification link sent to your email.",
+      uid: userRecord.uid,
+    });
+  } catch (error) {
+    console.error("Error in /api/register:", error);
+    return res.status(500).json({ error: error.message });
+  }
+});
 
 const verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
