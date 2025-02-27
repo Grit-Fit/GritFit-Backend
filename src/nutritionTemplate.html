@@ -5,8 +5,9 @@
   <title>Your Personalized Nutrition 101 PDF! 🍽️</title>
   
   <style>
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Color+Emoji&display=swap');
     body {
-      font-family: Arial, sans-serif;
+      font-family: Arial,'Noto Color Emoji', sans-serif;
       background-color: #f7f7f7;
       margin: 0;
       padding: 20px;
@@ -32,6 +33,23 @@
     li {
       margin-bottom: 10px;
     }
+    .table-container {
+      margin-top: 20px;
+      overflow-x: auto;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: center;
+    }
+    th {
+      background-color: #f2f2f2;
+    }
     .disclaimer {
       font-size: 0.8em;
       color: #888;
@@ -49,35 +67,77 @@
       to hit those goals. Let’s dive in!
     </p>
     <hr>
+    
     <h2>1. Your Maintenance Calories 💪</h2>
     <p>
       To keep your body running like a well-oiled machine, you need about <strong>{{maintenanceCalories}}</strong>
       calories per day. This is the magic number that keeps you from turning into a couch potato or a gym rat—just the perfect balance!
     </p>
     <hr>
+
     <h2>2. Your Target Calories 🎯</h2>
     <p>Depending on your goals, here’s how many calories you should be consuming daily:</p>
     <ul>
-      <li>
-        <strong>Bulk Up:</strong> For muscle gains, aim for <strong>{{targetCaloriesBulk}}</strong> calories. Time to unleash your inner beast!
-      </li>
-      <li>
-        <strong>Cut Down:</strong> If you want to shed some extra fluff, target <strong>{{targetCaloriesCut}}</strong> calories. Beach body, here you come!
-      </li>
-      <li>
-        <strong>Recomp:</strong> Just looking to keep things steady? Stick with <strong>{{maintenanceCalories}}</strong> calories. You’re perfect the way you are!
-      </li>
+      <li><strong>Bulk Up:</strong> For muscle gains, aim for <strong>{{targetCaloriesBulk}}</strong> calories. Time to unleash your inner beast!</li>
+      <li><strong>Cut Down:</strong> If you want to shed some extra fluff, target <strong>{{targetCaloriesCut}}</strong> calories. Beach body, here you come!</li>
+      <li><strong>Recomp:</strong> Just looking to keep things steady? Stick with <strong>{{maintenanceCalories}}</strong> calories. You’re perfect the way you are!</li>
     </ul>
     <hr>
+
     <h2>3. Macro Split Breakdown 🥚🍎</h2>
-    <p>
-      Now, let’s get into the nitty-gritty of your macros! Here’s how your calories should be split:
-    </p>
-    <ul>
+    
+    <!-- <ul>
       <li><strong>Protein:</strong> <strong>{{proteinGrams}}</strong> grams</li>
       <li><strong>Carbohydrates:</strong> <strong>{{carbGrams}}</strong> grams</li>
       <li><strong>Fats:</strong> <strong>{{fatGrams}}</strong> grams</li>
+    </ul> -->
+
+    <h3> Why These Macros Matter?</h3>
+    <ul>
+      <li><strong>Proteins:</strong> Protein is essential for <strong>building and repairing tissues</strong>, producing enzymes and hormones, and supporting overall muscle and immune function.  
+        It plays a critical role in recovery after workouts and helps maintain lean body mass, making it an essential component for athletes and fitness enthusiasts. 
+        High-protein foods include <strong>meats, fish, eggs, dairy, legumes, and plant-based sources like tofu and quinoa</strong>.</li>
+
+      <li><strong>Fats:</strong> Fats are crucial for <strong>energy production, hormone balance, brain function, and the absorption of essential vitamins</strong> (A, D, E, and K).  
+        They also contribute to <strong>cell membrane integrity and joint lubrication</strong>, making them vital for overall health.  
+        <strong>Healthy fat sources include avocados, nuts, seeds, olive oil, and fatty fish</strong>.</li>
+
+      <li><strong>Carbohydrates:</strong> Carbohydrates are the body's <strong>primary energy source</strong>, fueling daily activities and vital bodily functions.  
+        They are particularly important for <strong>high-intensity workouts</strong> and <strong>muscle glycogen replenishment</strong> after exercise.  
+        Whole grains, fruits, vegetables, and legumes are excellent sources of <strong>complex carbohydrates</strong>, which provide sustained energy and dietary fiber for digestive health.</li>
     </ul>
+
+    <p>Now, let’s get into the nitty-gritty of your macros! Here’s how your calories should be split:</p>
+
+    <div class="table-container">
+      <table>
+        <tr>
+          <th>Macronutrient</th>
+          <th>Cutting</th>
+          <th>Bulking</th>
+          <th>Recomp</th>
+        </tr>
+        <tr>
+          <td><strong>Protein (g)</strong></td>
+          <td>{{proteinCut}}</td>
+          <td>{{proteinBulk}}</td>
+          <td>{{proteinRecomp}}</td>
+        </tr>
+        <tr>
+          <td><strong>Fats (g)</strong></td>
+          <td>{{fatCut}}</td>
+          <td>{{fatBulk}}</td>
+          <td>{{fatRecomp}}</td>
+        </tr>
+        <tr>
+          <td><strong>Carbohydrates (g)</strong></td>
+          <td>{{carbCut}}</td>
+          <td>{{carbBulk}}</td>
+          <td>{{carbRecomp}}</td>
+        </tr>
+      </table>
+    </div>
+
     <p>
       <em>Pro Tip:</em> Hitting your macro goals is like playing Tetris—once you fit all the pieces together, it’s super satisfying!
     </p>
