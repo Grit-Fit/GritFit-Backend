@@ -176,54 +176,69 @@ app.use(express.json());
 // 1) Endpoint to generate PDF
 app.post("/api/generatePdf", verifyToken, async (req, res) => {
   try {
-    // 2) Get user data from request body
-    const {
-      userName,
-      maintenanceCalories,
-      targetCaloriesBulk,
-      targetCaloriesCut,
-      targetCaloriesMaintain,
-      proteinGrams,
-      carbGrams,
-      fatGrams,
-    } = req.body;
+    // Extract maintenance calories from request
+    const { userName, maintenanceCalories } = req.body;
 
-    // 3) Read the HTML template from disk
+    // 1) Calculate Bulk & Cut Calories
+    const targetCaloriesBulk = maintenanceCalories + 500;
+    const targetCaloriesCut = maintenanceCalories - 500;
+    const targetCaloriesRecomp = maintenanceCalories; // Recomp stays same
+
+    // 2) Calculate Macros (Protein, Fats, Carbs) for Each Goal
+    const calculateMacros = (calories) => {
+      const proteinCalories = calories * 0.25; // 25% protein
+      const carbCalories = calories * 0.50; // 50% carbs
+      const fatCalories = calories * 0.25; // 25% fats
+
+      return {
+        protein: Math.round(proteinCalories / 4), // 1g protein = 4 kcal
+        carbs: Math.round(carbCalories / 4), // 1g carbs = 4 kcal
+        fats: Math.round(fatCalories / 9), // 1g fat = 9 kcal
+      };
+    };
+
+    const macrosBulk = calculateMacros(targetCaloriesBulk);
+    const macrosCut = calculateMacros(targetCaloriesCut);
+    const macrosRecomp = calculateMacros(targetCaloriesRecomp);
+
+    // 3) Read HTML Template
     const templatePath = path.join(__dirname, "nutritionTemplate.html");
     const htmlContent = fs.readFileSync(templatePath, "utf8");
 
-    // 4) Compile the template with Handlebars
+    // 4) Compile with Handlebars
     const template = handlebars.compile(htmlContent);
 
-    // 5) Pass the user data to the template
+    // 5) Generate final HTML with user data
     const finalHtml = template({
       userName,
       maintenanceCalories,
       targetCaloriesBulk,
       targetCaloriesCut,
-      targetCaloriesMaintain,
-      proteinGrams,
-      carbGrams,
-      fatGrams,
+      targetCaloriesRecomp,
+      proteinBulk: macrosBulk.protein,
+      proteinCut: macrosCut.protein,
+      proteinRecomp: macrosRecomp.protein,
+      fatBulk: macrosBulk.fats,
+      fatCut: macrosCut.fats,
+      fatRecomp: macrosRecomp.fats,
+      carbBulk: macrosBulk.carbs,
+      carbCut: macrosCut.carbs,
+      carbRecomp: macrosRecomp.carbs,
     });
 
-    // 6) Create PDF with html-pdf (instead of Puppeteer)
-    //    Make sure you have: npm install html-pdf
-    //    Also ensure wkhtmltopdf is installed on your server.
+    // 6) Convert HTML to PDF
     const options = { format: "A4" };
-
     pdf.create(finalHtml, options).toBuffer((err, buffer) => {
       if (err) {
-        console.error("Error generating PDF with html-pdf:", err);
+        console.error("Error generating PDF:", err);
         return res.status(500).send("Failed to generate PDF");
       }
 
-      // 7) Send PDF as download
+      // 7) Send PDF as response
       res.setHeader("Content-Type", "application/pdf");
       res.setHeader("Content-Disposition", 'attachment; filename="Nutrition101.pdf"');
       return res.send(buffer);
     });
-
   } catch (error) {
     console.error("Error generating PDF:", error);
     res.status(500).send("Failed to generate PDF");
