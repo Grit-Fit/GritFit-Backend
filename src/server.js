@@ -339,9 +339,6 @@ app.post("/api/signIn", async (req, res) => {
 
     if (error) throw error;
 
-    if (!user.is_verified) {
-      return res.status(403).json({ message: "Email not verified. Please verify OTP first." }); //email not verified
-    }
 
     if (!users || users.length === 0) {
       return res.status(401).json({ message: "Invalid credentials" });
