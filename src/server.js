@@ -9,7 +9,28 @@ const pdf = require("html-pdf");
 const handlebars = require("handlebars");
 const fs = require("fs");
 const path = require("path");
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
 
+
+
+
+const verifySupabaseToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ message: "Authorization header missing or invalid" });
+  }
+
+  const token = authHeader.split(' ')[1];
+
+  try {
+      const decoded = jwt.verify(token, SUPABASE_JWT_SECRET);
+      req.user = decoded; // Attach user data from token to request
+      next();
+  } catch (err) {
+      console.error("Supabase token verification failed:", err.message);
+      return res.status(401).json({ message: "Invalid or expired token" });
+  }
+};
 
 
 dotenv.config();
@@ -123,7 +144,7 @@ app.get("/", (req, res) => {
 });
 
 // getUserNutrition
-app.get("/api/getUserNutrition", verifyToken, async (req, res) => {
+app.get("/api/getUserNutrition", verifySupabaseToken, async (req, res) => {
   try {
     const userId = req.user.id; // or req.user.userid, depending on your JWT
     const { data, error } = await supabase
@@ -143,7 +164,7 @@ app.get("/api/getUserNutrition", verifyToken, async (req, res) => {
 });
 
 // saveUserNutrition
-app.post("/api/saveUserNutrition", verifyToken, async (req, res) => {
+app.post("/api/saveUserNutrition", verifySupabaseToken, async (req, res) => {
   try {
     const userId = req.user.id; // or req.user.userid
     const { age, gender, weight, weightUnit, height, heightUnit, activity, maintenanceCalories } = req.body;
@@ -177,7 +198,7 @@ app.post("/api/saveUserNutrition", verifyToken, async (req, res) => {
 app.use(express.json());
 
 // 1) Endpoint to generate PDF
-app.post("/api/generatePdf", verifyToken, async (req, res) => {
+app.post("/api/generatePdf", verifySupabaseToken, async (req, res) => {
   try {
     // Extract maintenance calories from request
     const { userName, maintenanceCalories } = req.body;
@@ -273,122 +294,122 @@ app.post("/api/refreshToken", (req, res) => {
 });
 
 
-app.post("/api/createAccount", async (req, res) => {
-  const { email, password } = req.body;
+// app.post("/api/createAccount", async (req, res) => {
+//   const { email, password } = req.body;
 
-  try {
-    console.log("Attempting to create account for:", email);
+//   try {
+//     console.log("Attempting to create account for:", email);
 
 
-    const { data: existingUsers, error: checkError } = await supabase
-      .from("userprofile")
-      .select("email")
-      .eq("email", email);
+//     const { data: existingUsers, error: checkError } = await supabase
+//       .from("userprofile")
+//       .select("email")
+//       .eq("email", email);
 
-    if (checkError) {
-      console.error("Error checking existing user:", checkError);
-      throw checkError;
-    }
+//     if (checkError) {
+//       console.error("Error checking existing user:", checkError);
+//       throw checkError;
+//     }
 
-    if (existingUsers && existingUsers.length > 0) {
-      console.log("User already exists:", email);
-      return res.status(400).json({ message: "User already exists!" });
-    }
+//     if (existingUsers && existingUsers.length > 0) {
+//       console.log("User already exists:", email);
+//       return res.status(400).json({ message: "User already exists!" });
+//     }
 
-    // Hash the password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
+//     // Hash the password
+//     const saltRounds = 10;
+//     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    console.log("Inserting new user into database");
+//     console.log("Inserting new user into database");
 
-    // Add new user
-    const { data: newUser, error } = await supabase
-      .from("userprofile")
-      .insert({
-        email,
-        password: hashedPassword,
-        created_at: new Date().toISOString(),
-      })
-      .select()
-      .single();
+//     // Add new user
+//     const { data: newUser, error } = await supabase
+//       .from("userprofile")
+//       .insert({
+//         email,
+//         password: hashedPassword,
+//         created_at: new Date().toISOString(),
+//       })
+//       .select()
+//       .single();
 
-    if (error) {
-      console.error("Error inserting new user:", error);
-      throw error;
-    }
+//     if (error) {
+//       console.error("Error inserting new user:", error);
+//       throw error;
+//     }
 
-    if (!newUser) {
-      throw new Error("User created but not returned from database");
-    }
+//     if (!newUser) {
+//       throw new Error("User created but not returned from database");
+//     }
 
-    console.log("New user created successfully:", newUser.email);
+//     console.log("New user created successfully:", newUser.email);
 
   
-    const tokens = generateTokens({ id: newUser.userid, email });
-    res.cookie("refreshToken", tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "Strict",
-    });
+//     const tokens = generateTokens({ id: newUser.userid, email });
+//     res.cookie("refreshToken", tokens.refreshToken, {
+//       httpOnly: true,
+//       secure: process.env.NODE_ENV === "production",
+//       sameSite: "Strict",
+//     });
 
-    return res.status(201).json({
-      message: "User created successfully!",
-      token: tokens.accessToken,
-    });
-  } catch (error) {
-    console.error("Error creating user:", error);
-    console.error("Error details:", JSON.stringify(error, null, 2));
-    res
-      .status(500)
-      .json({ message: "Error creating account", error: error.message });
-  }
-});
+//     return res.status(201).json({
+//       message: "User created successfully!",
+//       token: tokens.accessToken,
+//     });
+//   } catch (error) {
+//     console.error("Error creating user:", error);
+//     console.error("Error details:", JSON.stringify(error, null, 2));
+//     res
+//       .status(500)
+//       .json({ message: "Error creating account", error: error.message });
+//   }
+// });
 
-// Sign in user
-app.post("/api/signIn", async (req, res) => {
-  const { email, password } = req.body;
+// // Sign in user
+// app.post("/api/signIn", async (req, res) => {
+//   const { email, password } = req.body;
 
-  try {
-    // Fetch user from database
-    const { data: users, error } = await supabase
-      .from("userprofile")
-      .select("*")
-      .eq("email", email);
+//   try {
+//     // Fetch user from database
+//     const { data: users, error } = await supabase
+//       .from("userprofile")
+//       .select("*")
+//       .eq("email", email);
 
-    if (error) throw error;
+//     if (error) throw error;
 
 
-    if (!users || users.length === 0) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
+//     if (!users || users.length === 0) {
+//       return res.status(401).json({ message: "Invalid credentials" });
+//     }
 
-    const user = users[0];
-
-   
-    const passwordMatch = await bcrypt.compare(password, user.password);
-    if (!passwordMatch) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
+//     const user = users[0];
 
    
-    const tokens = generateTokens({ id: user.userid, email: user.email });
-    res.cookie("refreshToken", tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "Strict",
-    });
+//     const passwordMatch = await bcrypt.compare(password, user.password);
+//     if (!passwordMatch) {
+//       return res.status(401).json({ message: "Invalid credentials" });
+//     }
 
-    return res
-      .status(200)
-      .json({ message: "Signed in successfully!", token: tokens.accessToken });
-  } catch (error) {
-    console.error("Error signing in:", error);
-    res.status(500).json({ message: "Error signing in", error: error.message });
-  }
-});
+   
+//     const tokens = generateTokens({ id: user.userid, email: user.email });
+//     res.cookie("refreshToken", tokens.refreshToken, {
+//       httpOnly: true,
+//       secure: process.env.NODE_ENV === "production",
+//       sameSite: "Strict",
+//     });
+
+//     return res
+//       .status(200)
+//       .json({ message: "Signed in successfully!", token: tokens.accessToken });
+//   } catch (error) {
+//     console.error("Error signing in:", error);
+//     res.status(500).json({ message: "Error signing in", error: error.message });
+//   }
+// });
 
 
-app.post("/api/updateTaskStatus", verifyToken, async (req, res) => {
+app.post("/api/updateTaskStatus", verifySupabaseToken, async (req, res) => {
   const { taskId, phaseId, status } = req.body;
   const userId = req.user.id;
 
@@ -418,7 +439,7 @@ app.post("/api/updateTaskStatus", verifyToken, async (req, res) => {
 });
 
 // Update username
-app.post("/api/updateUsername", verifyToken, async (req, res) => {
+app.post("/api/updateUsername", verifySupabaseToken, async (req, res) => {
   const { newUsername } = req.body;
 
   try {
@@ -440,7 +461,7 @@ app.post("/api/updateUsername", verifyToken, async (req, res) => {
   }
 });
 
-app.get("/api/getUserProfile", verifyToken, async (req, res) => {
+app.get("/api/getUserProfile", verifySupabaseToken, async (req, res) => {
   try {
     const email = req.user.email; // from the JWT via verifyToken
     const { data, error } = await supabase
@@ -468,7 +489,7 @@ app.get("/api/getUserProfile", verifyToken, async (req, res) => {
 
 
 
-app.post("/api/getUserProgress", verifyToken, async (req, res) => {
+app.post("/api/getUserProgress", verifySupabaseToken, async (req, res) => {
   try {
     const userId = req.user.id;
     const { data: userProgressData, error: checkError } = await supabase
@@ -502,7 +523,7 @@ app.post("/api/getUserProgress", verifyToken, async (req, res) => {
 });
 
 
-app.post("/api/getTaskData", verifyToken, async (req, res) => {
+app.post("/api/getTaskData", verifySupabaseToken, async (req, res) => {
   console.log("[getTaskData] Fetching task data for user...");
   const userId = req.user.id;
 
@@ -595,7 +616,7 @@ const existingData = userProgress.reduce((acc, record) => {
 });
 
 
-app.post("/api/userprogressStart", verifyToken, async (req, res) => {
+app.post("/api/userprogressStart", verifySupabaseToken, async (req, res) => {
   const { phaseId, taskId } = req.body;
   const userId = req.user.id;
 
@@ -654,7 +675,7 @@ app.post("/api/userprogressStart", verifyToken, async (req, res) => {
   }
 });
 
-app.post("/api/userprogressNC", verifyToken, async (req, res) => {
+app.post("/api/userprogressNC", verifySupabaseToken, async (req, res) => {
   const userId = req.user.id;
   const { phaseId, taskId, reasonForNonCompletion, failedGoal } = req.body;
 
@@ -724,7 +745,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
 });
 
 
-app.post("/api/userprogressC", verifyToken, async (req, res) => {
+app.post("/api/userprogressC", verifySupabaseToken, async (req, res) => {
   const userId = req.user.id;
   const { phaseId: rawPhase, taskId: rawTask } = req.body;
 
