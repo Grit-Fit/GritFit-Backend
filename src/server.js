@@ -675,7 +675,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           return res.status(404).json({ message: "Task details not found" });
       }
 
-      // Update current task to "Not Completed"
+      // Update current task to Not Completed
       const { error: updateError } = await supabase
           .from("userprogress")
           .update({
@@ -692,7 +692,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           return res.status(500).json({ message: "Failed to update current task" });
       }
 
-      // Check how many "Not Completed" tasks exist in this phase to decide if the cheat day is used
+      // Check if cheat day was already used in this phase
       const { data: phaseProgress, error: phaseProgressError } = await supabase
           .from("userprogress")
           .select("cheat_used, taskstatus")
@@ -704,13 +704,14 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           return res.status(500).json({ message: "Failed to check phase progress" });
       }
 
-      // Determine if the user already used their cheat day in this phase
       const hasUsedCheat = phaseProgress.some(row => row.cheat_used);
 
-      const nextActivationDate = new Date(Date.now() + 10 * 1000); // 10-hour delay
+      const nextActivationDate = new Date(Date.now() + 10 * 60 * 60 * 1000); // 10-hour delay
 
+      // Logic for Phases 1 & 2 only
       if ((phaseId === 1 || phaseId === 2) && !hasUsedCheat) {
-          // First "Not Completed" - use the cheat day and allow moving to the next task
+          // First time user swipes left in this phase — grant free pass (move to next task & mark cheat_used)
+
           const { data: nextTask, error: nextTaskError } = await supabase
               .from("taskdetails")
               .select("*")
@@ -731,7 +732,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
                   taskstatus: "Not Started",
                   task_activation_date: nextActivationDate.toISOString(),
                   created_at: new Date().toISOString(),
-                  cheat_used: true  // Mark cheat as used for this phase
+                  cheat_used: true  // Mark cheat used for this phase
               });
 
           if (insertNextTaskError) {
@@ -741,10 +742,10 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
 
           return res.status(200).json({ message: "Cheat day used - moved to next task." });
 
-      } else {
-          // Cheat already used (or not eligible for cheat - e.g., Phase 3)
-          // Repeat the same task with a new activation date
-          const { error: reinsertCurrentTaskError } = await supabase
+      } else if (phaseId === 1 || phaseId === 2) {
+          // Already used cheat in Phase 1 or 2 — user is stuck, repeat same task
+
+          const { error: repeatInsertError } = await supabase
               .from("userprogress")
               .insert({
                   userid: userId,
@@ -752,15 +753,35 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
                   taskstatus: "Not Started",
                   task_activation_date: nextActivationDate.toISOString(),
                   created_at: new Date().toISOString(),
-                  cheat_used: hasUsedCheat // Carry forward if already used
+                  cheat_used: true  // Always keep true after it's used once
               });
 
-          if (reinsertCurrentTaskError) {
-              console.error("[userprogressNC] Failed to reinsert current task for retry:", reinsertCurrentTaskError);
+          if (repeatInsertError) {
+              console.error("[userprogressNC] Failed to reinsert same task for retry:", repeatInsertError);
               return res.status(500).json({ message: "Failed to reschedule task." });
           }
 
-          return res.status(200).json({ message: "Task rescheduled for retry - no more cheats allowed." });
+          return res.status(200).json({ message: "Task rescheduled for retry - cheat already used." });
+
+      } else {
+          // For Phase 3+ or any phase with no cheat logic — normal retry behavior
+          const { error: normalRetryInsertError } = await supabase
+              .from("userprogress")
+              .insert({
+                  userid: userId,
+                  taskdetailsid: currentTask.taskdetailsid,
+                  taskstatus: "Not Started",
+                  task_activation_date: nextActivationDate.toISOString(),
+                  created_at: new Date().toISOString(),
+                  cheat_used: false
+              });
+
+          if (normalRetryInsertError) {
+              console.error("[userprogressNC] Failed to reinsert current task:", normalRetryInsertError);
+              return res.status(500).json({ message: "Failed to reschedule task." });
+          }
+
+          return res.status(200).json({ message: "Task rescheduled for retry." });
       }
 
   } catch (error) {
