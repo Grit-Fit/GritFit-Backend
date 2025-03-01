@@ -703,7 +703,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
 
       const hasUsedCheat = phaseProgress.some(row => row.cheat_used);
 
-      const nextActivationDate = new Date(Date.now() + 10 * 60 * 60 * 1000); // 10-hour delay
+      const nextActivationDate = new Date(Date.now() + 10 * 1000); // 10-hour delay
 
       // Logic for Phases 1 & 2 only
       if ((phaseId === 1 || phaseId === 2) && !hasUsedCheat) {
