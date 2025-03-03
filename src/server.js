@@ -143,7 +143,11 @@ app.get("/api/getUserNutrition", verifyToken, async (req, res) => {
 });
 
 app.post("/api/betaSignup", async (req, res) => {
+  console.log("Raw Request Body:", req.body);  // Log incoming request body
+
   const { name, email, message } = req.body;
+
+  console.log("Extracted Fields:", { name, email, message }); 
 
   try {
       // Insert into the beta_signups table in Supabase
@@ -163,7 +167,7 @@ app.post("/api/betaSignup", async (req, res) => {
           return res.status(500).json({ message: "Failed to save beta signup" });
       }
 
-      return res.status(200).json({ message: "Thanks for signing up! We'll be in touch soon." });
+      return res.status(200).json({ message: "Thanks for signing up! We'll be in touch soon.💪" });
   } catch (err) {
       console.error("Unexpected error saving beta signup:", err);
       res.status(500).json({ message: "Unexpected error", error: err.message });
