@@ -142,6 +142,35 @@ app.get("/api/getUserNutrition", verifyToken, async (req, res) => {
   }
 });
 
+app.post("/api/betaSignup", async (req, res) => {
+  const { name, email, message } = req.body;
+
+  try {
+      // Insert into the beta_signups table in Supabase
+      const { error } = await supabase
+          .from("beta_signups")
+          .insert([
+              {
+                  name,
+                  email,
+                  message,
+                  created_at: new Date().toISOString()
+              }
+          ]);
+
+      if (error) {
+          console.error("Error saving beta signup:", error);
+          return res.status(500).json({ message: "Failed to save beta signup" });
+      }
+
+      return res.status(200).json({ message: "Thanks for signing up! We'll be in touch soon." });
+  } catch (err) {
+      console.error("Unexpected error saving beta signup:", err);
+      res.status(500).json({ message: "Unexpected error", error: err.message });
+  }
+});
+
+
 // saveUserNutrition
 app.post("/api/saveUserNutrition", verifyToken, async (req, res) => {
   try {
