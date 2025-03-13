@@ -303,6 +303,66 @@ app.post("/api/refreshToken", (req, res) => {
 });
 
 
+app.delete("/api/deleteAccount", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // from JWT after verifyToken
+
+    // 1) Delete the user row from userprofile
+    //    or set a "deleted" flag if you prefer soft-deletion
+    const { error: deleteError } = await supabase
+      .from("userprofile")
+      .delete()
+      .eq("userid", userId);
+
+    if (deleteError) {
+      console.error("Error deleting account:", deleteError);
+      return res.status(500).json({ message: "Failed to delete account" });
+    }
+
+    // 2) Optionally also remove them from other tables, or do so in a single transaction
+    // For example, userprogress, user_nutrition, etc.:
+    // await supabase.from("userprogress").delete().eq("userid", userId);
+    // ... any other cleanup ...
+
+    // 3) Send success response
+    return res.status(200).json({ message: "Account deleted successfully" });
+  } catch (error) {
+    console.error("Delete account error:", error);
+    return res.status(500).json({ message: "Server error deleting account" });
+  }
+});
+
+
+app.post("/api/restartJourney", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // 1) Delete userprogress rows for this user
+    const { error: progressError } = await supabase
+      .from("userprogress")
+      .delete()
+      .eq("userid", userId);
+
+    if (progressError) {
+      console.error("Error restarting journey:", progressError);
+      return res.status(500).json({ message: "Failed to restart journey" });
+    }
+
+    // 2) Optionally reset other tables, like user_nutrition or user_achievements
+    //    if you want them truly “fresh”
+    // await supabase.from("user_nutrition").delete().eq("userid", userId);
+    // or you might just do partial updates, etc.
+
+    // 3) Return success
+    return res.status(200).json({ message: "Journey restarted, progress cleared" });
+  } catch (error) {
+    console.error("Restart journey error:", error);
+    return res.status(500).json({ message: "Server error restarting journey" });
+  }
+});
+
+
+
 app.post("/api/createAccount", async (req, res) => {
   const { email, password } = req.body;
 
@@ -475,7 +535,7 @@ app.get("/api/getUserProfile", verifyToken, async (req, res) => {
     const email = req.user.email; // from the JWT via verifyToken
     const { data, error } = await supabase
       .from("userprofile")
-      .select("username")
+      .select("username", "email")
       .eq("email", email)
       .single();
 
@@ -489,7 +549,10 @@ app.get("/api/getUserProfile", verifyToken, async (req, res) => {
     }
 
     // Return the username
-    return res.status(200).json({ username: data.username });
+    return res.status(200).json({
+      username: data.username,
+      email: data.email,
+    });
   } catch (err) {
     console.error(err);
     return res.status(500).json({ message: err.message });
@@ -735,7 +798,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       }
 
       const cheatUsed = cheatCheck?.cheat_used || false;
-      const nextActivationDate = new Date(Date.now() + 10 * 60 * 60 * 1000); // 10-hour delay
+      const nextActivationDate = new Date(Date.now() + 10 * 1000); // 10-hour delay
 
       if ((phaseId === 1 || phaseId === 2) && !cheatUsed) {
           // First time left swipe in this phase — allow cheat, move forward, and mark cheat_used=true
@@ -886,7 +949,7 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(200).json({ message: "All tasks done" });
     }
 
-    const activationDate = new Date(Date.now() + 10 * 60 * 60 * 1000); //time lag
+    const activationDate = new Date(Date.now() + 10 * 1000); //time lag
     const { error: insertError } = await supabase
       .from("userprogress")
       .insert({
