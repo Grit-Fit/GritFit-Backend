@@ -798,7 +798,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       }
 
       const cheatUsed = cheatCheck?.cheat_used || false;
-      const nextActivationDate = new Date(Date.now() + 10 * 1000); // 10-hour delay
+      const nextActivationDate = new Date(Date.now() + 10 * 60 * 60 * 1000); // 10-hour delay
 
       if ((phaseId === 1 || phaseId === 2) && !cheatUsed) {
           // First time left swipe in this phase — allow cheat, move forward, and mark cheat_used=true
@@ -949,7 +949,7 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(200).json({ message: "All tasks done" });
     }
 
-    const activationDate = new Date(Date.now() + 10 * 1000); //time lag
+    const activationDate = new Date(Date.now() + 10 * 60 * 60 * 1000); //time lag
     const { error: insertError } = await supabase
       .from("userprogress")
       .insert({
