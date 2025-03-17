@@ -753,21 +753,70 @@ app.post("/api/userprogressStart", verifyToken, async (req, res) => {
 // 1) Import moment-timezone at the top
 const moment = require("moment-timezone");
 
-
-
 app.post("/api/userprogressNC", verifyToken, async (req, res) => {
   const userId = req.user.id;
   const { phaseId, taskId, reasonForNonCompletion, failedGoal } = req.body;
 
-  // Basic validation
   if (!phaseId || !taskId || !reasonForNonCompletion) {
-    return res.status(400).json({
-      message: "Required fields missing: phaseId, taskId, reasonForNonCompletion",
-    });
+    return res
+      .status(400)
+      .json({
+        message: "Required fields missing: phaseId, taskId, reasonForNonCompletion",
+      });
   }
 
   try {
-    // 1) Fetch the user's time zone from userprofile
+    // 2) Find the current row in taskdetails
+    const { data: currentTask, error: taskError } = await supabase
+      .from("taskdetails")
+      .select("*")
+      .eq("phaseid", phaseId)
+      .eq("taskid", taskId)
+      .single();
+
+    if (taskError || !currentTask) {
+      return res.status(404).json({ message: "Task details not found" });
+    }
+
+    // 3) Mark current task as "Not Completed"
+    const { error: updateError } = await supabase
+      .from("userprogress")
+      .update({
+        taskstatus: "Not Completed",
+        completion_date: new Date().toISOString(),
+        notcompletionreason: reasonForNonCompletion,
+        whichgoal: failedGoal && phaseId === 3 ? failedGoal : null
+      })
+      .eq("taskdetailsid", currentTask.taskdetailsid)
+      .eq("userid", userId);
+
+    if (updateError) {
+      console.error("Failed to mark task as Not Completed:", updateError);
+      return res.status(500).json({ message: "Failed to update task status." });
+    }
+
+    // 4) Check if the cheat day has already been used for this phase
+    const { data: cheatCheck, error: cheatCheckError } = await supabase
+      .from("user_phase_cheat_tracker")
+      .select("cheat_used")
+      .eq("userid", userId)
+      .eq("phaseid", phaseId)
+      .single();
+
+    if (cheatCheckError && cheatCheckError.code !== 'PGRST116') {  // Ignore 'no rows found' error
+      console.error("Failed to check phase cheat status:", cheatCheckError);
+      return res.status(500).json({ message: "Failed to check cheat day status." });
+    }
+
+    const cheatUsed = cheatCheck?.cheat_used || false;
+
+    // 5) [ORIGINAL] Next activation was naive 10-second or 10-hour delay
+    // const nextActivationDate = new Date(Date.now() + 10 * 1000); // 10-hour delay
+
+    // 6) [NEW] Instead, fetch user timezone & compute tomorrow local midnight
+    //    Then overwrite nextActivationDate with that value in UTC
+    //    (We keep the variable name the same to minimize code changes)
+    // A) Fetch user’s timezone from userprofile
     const { data: userProfile, error: userProfileErr } = await supabase
       .from("userprofile")
       .select("timezone")
@@ -780,117 +829,14 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
     }
     const userTz = userProfile?.timezone || "UTC";
 
-    // 2) Find the current task row in taskdetails
-    const { data: currentTask, error: taskError } = await supabase
-      .from("taskdetails")
-      .select("*")
-      .eq("phaseid", phaseId)
-      .eq("taskid", taskId)
-      .single();
-
-
-    if (taskError || !currentTask) {
-      return res.status(404).json({ message: "Task details not found" });
-    }
-
-      const cheatUsed = cheatCheck?.cheat_used || false;
-      const nextActivationDate = new Date(Date.now() + 16 * 60 * 60 * 1000); // 10-hour delay
-
-      if ((phaseId === 1 || phaseId === 2) && !cheatUsed) {
-          // First time left swipe in this phase — allow cheat, move forward, and mark cheat_used=true
-
-          const { data: nextTask, error: nextTaskError } = await supabase
-              .from("taskdetails")
-              .select("*")
-              .eq("phaseid", phaseId)
-              .eq("taskid", taskId + 1)
-              .single();
-
-          if (nextTaskError || !nextTask) {
-              return res.status(200).json({ message: "No next task available - end of phase." });
-          }
-
-          const { error: insertNextTaskError } = await supabase
-              .from("userprogress")
-              .insert({
-                  userid: userId,
-                  taskdetailsid: nextTask.taskdetailsid,
-                  taskstatus: "Not Started",
-                  task_activation_date: nextActivationDate.toISOString(),
-                  created_at: new Date().toISOString()
-              });
-
-          if (insertNextTaskError) {
-              console.error("Failed to insert next task after cheat day:", insertNextTaskError);
-              return res.status(500).json({ message: "Failed to insert next task." });
-          }
-
-          // Record cheat day usage for this phase
-          await supabase
-              .from("user_phase_cheat_tracker")
-              .upsert([
-                  {
-                      userid: userId,
-                      phaseid: phaseId,
-                      cheat_used: true,
-                      created_at: new Date().toISOString()
-                  }
-              ]);
-
-          return res.status(200).json({ message: "Cheat day used - moved to next task." });
-
-      } else if (phaseId === 1 || phaseId === 2) {
-          // Cheat already used — repeat same task until completed
-          const { error: repeatInsertError } = await supabase
-              .from("userprogress")
-              .insert({
-                  userid: userId,
-                  taskdetailsid: currentTask.taskdetailsid,
-                  taskstatus: "Not Started",
-                  task_activation_date: nextActivationDate.toISOString(),
-                  created_at: new Date().toISOString()
-              });
-
-
-    // 3) Mark current task as Not Completed
-    const { error: updateError } = await supabase
-      .from("userprogress")
-      .update({
-        taskstatus: "Not Completed",
-        completion_date: new Date().toISOString(),
-        notcompletionreason: reasonForNonCompletion,
-        whichgoal: failedGoal && phaseId === 3 ? failedGoal : null,
-      })
-      .eq("taskdetailsid", currentTask.taskdetailsid)
-      .eq("userid", userId);
-
-    if (updateError) {
-      console.error("Failed to mark task as Not Completed:", updateError);
-      return res.status(500).json({ message: "Failed to update task status." });
-    }
-
-    // 4) Check cheat usage for Phase 1 or 2
-    const { data: cheatCheck, error: cheatCheckError } = await supabase
-      .from("user_phase_cheat_tracker")
-      .select("cheat_used")
-      .eq("userid", userId)
-      .eq("phaseid", phaseId)
-      .single();
-
-    if (cheatCheckError && cheatCheckError.code !== "PGRST116") {
-      console.error("Failed to check phase cheat status:", cheatCheckError);
-      return res.status(500).json({ message: "Failed to check cheat day status." });
-    }
-
-    const cheatUsed = cheatCheck?.cheat_used || false;
-
-    // 5) Compute tomorrow's local midnight => convert => store in UTC
+    // B) Compute tomorrow’s local midnight => convert to UTC => final nextActivationDate
     const nowInTz = moment().tz(userTz);
     const tomorrowMidnightInTz = nowInTz.clone().add(1, "day").startOf("day");
     const nextActivationDate = tomorrowMidnightInTz.utc().toDate();
 
-    // 6) If Phase 1 or 2 and cheat not used => skip forward one day
+    // 7) The rest of your cheat usage logic remains unchanged
     if ((phaseId === 1 || phaseId === 2) && !cheatUsed) {
+      // First time left swipe in this phase — allow cheat, move forward, and mark cheat_used=true
       const { data: nextTask, error: nextTaskError } = await supabase
         .from("taskdetails")
         .select("*")
@@ -909,7 +855,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           taskdetailsid: nextTask.taskdetailsid,
           taskstatus: "Not Started",
           task_activation_date: nextActivationDate.toISOString(),
-          created_at: new Date().toISOString(),
+          created_at: new Date().toISOString()
         });
 
       if (insertNextTaskError) {
@@ -917,7 +863,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
         return res.status(500).json({ message: "Failed to insert next task." });
       }
 
-      // Record cheat usage
+      // Record cheat day usage for this phase
       await supabase
         .from("user_phase_cheat_tracker")
         .upsert([
@@ -925,14 +871,14 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
             userid: userId,
             phaseid: phaseId,
             cheat_used: true,
-            created_at: new Date().toISOString(),
-          },
+            created_at: new Date().toISOString()
+          }
         ]);
 
       return res.status(200).json({ message: "Cheat day used - moved to next task." });
 
     } else if (phaseId === 1 || phaseId === 2) {
-      // cheat used => re-insert the SAME task
+      // Cheat already used — repeat same task until completed
       const { error: repeatInsertError } = await supabase
         .from("userprogress")
         .insert({
@@ -940,7 +886,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           taskdetailsid: currentTask.taskdetailsid,
           taskstatus: "Not Started",
           task_activation_date: nextActivationDate.toISOString(),
-          created_at: new Date().toISOString(),
+          created_at: new Date().toISOString()
         });
 
       if (repeatInsertError) {
@@ -951,7 +897,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       return res.status(200).json({ message: "Cheat already used - retry same task." });
 
     } else {
-      // Phase 3 or above => always re-insert same task
+      // Default behavior for Phase 3 and above — always repeat same task
       const { error: normalRetryInsertError } = await supabase
         .from("userprogress")
         .insert({
@@ -959,7 +905,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           taskdetailsid: currentTask.taskdetailsid,
           taskstatus: "Not Started",
           task_activation_date: nextActivationDate.toISOString(),
-          created_at: new Date().toISOString(),
+          created_at: new Date().toISOString()
         });
 
       if (normalRetryInsertError) {
