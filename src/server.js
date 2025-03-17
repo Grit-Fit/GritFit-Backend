@@ -367,7 +367,7 @@ app.post("/api/restartJourney", verifyToken, async (req, res) => {
 
 
 app.post("/api/createAccount", async (req, res) => {
-  const { email, password } = req.body;
+  const { email, password, timezone } = req.body;
 
   try {
     console.log("Attempting to create account for:", email);
@@ -400,6 +400,7 @@ app.post("/api/createAccount", async (req, res) => {
       .insert({
         email,
         password: hashedPassword,
+        timezone,
         created_at: new Date().toISOString(),
       })
       .select()
@@ -758,15 +759,13 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
   const { phaseId, taskId, reasonForNonCompletion, failedGoal } = req.body;
 
   if (!phaseId || !taskId || !reasonForNonCompletion) {
-    return res
-      .status(400)
-      .json({
-        message: "Required fields missing: phaseId, taskId, reasonForNonCompletion",
-      });
+    return res.status(400).json({
+      message: "Required fields missing: phaseId, taskId, reasonForNonCompletion",
+    });
   }
 
   try {
-    // 2) Find the current row in taskdetails
+    // 1) Find the current row in taskdetails
     const { data: currentTask, error: taskError } = await supabase
       .from("taskdetails")
       .select("*")
@@ -778,14 +777,14 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Task details not found" });
     }
 
-    // 3) Mark current task as "Not Completed"
+    // 2) Mark current task as "Not Completed"
     const { error: updateError } = await supabase
       .from("userprogress")
       .update({
         taskstatus: "Not Completed",
         completion_date: new Date().toISOString(),
         notcompletionreason: reasonForNonCompletion,
-        whichgoal: failedGoal && phaseId === 3 ? failedGoal : null
+        whichgoal: failedGoal && phaseId === 3 ? failedGoal : null,
       })
       .eq("taskdetailsid", currentTask.taskdetailsid)
       .eq("userid", userId);
@@ -795,7 +794,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       return res.status(500).json({ message: "Failed to update task status." });
     }
 
-    // 4) Check if the cheat day has already been used for this phase
+    // 3) Check cheat usage (for Phase 1 or 2)
     const { data: cheatCheck, error: cheatCheckError } = await supabase
       .from("user_phase_cheat_tracker")
       .select("cheat_used")
@@ -803,20 +802,13 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       .eq("phaseid", phaseId)
       .single();
 
-    if (cheatCheckError && cheatCheckError.code !== 'PGRST116') {  // Ignore 'no rows found' error
+    if (cheatCheckError && cheatCheckError.code !== "PGRST116") {
       console.error("Failed to check phase cheat status:", cheatCheckError);
       return res.status(500).json({ message: "Failed to check cheat day status." });
     }
-
     const cheatUsed = cheatCheck?.cheat_used || false;
 
-    // 5) [ORIGINAL] Next activation was naive 10-second or 10-hour delay
-    // const nextActivationDate = new Date(Date.now() + 10 * 1000); // 10-hour delay
-
-    // 6) [NEW] Instead, fetch user timezone & compute tomorrow local midnight
-    //    Then overwrite nextActivationDate with that value in UTC
-    //    (We keep the variable name the same to minimize code changes)
-    // A) Fetch user’s timezone from userprofile
+    // 4) [NEW] fetch user timezone, schedule tomorrow midnight local
     const { data: userProfile, error: userProfileErr } = await supabase
       .from("userprofile")
       .select("timezone")
@@ -829,14 +821,12 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
     }
     const userTz = userProfile?.timezone || "UTC";
 
-    // B) Compute tomorrow’s local midnight => convert to UTC => final nextActivationDate
     const nowInTz = moment().tz(userTz);
     const tomorrowMidnightInTz = nowInTz.clone().add(1, "day").startOf("day");
     const nextActivationDate = tomorrowMidnightInTz.utc().toDate();
 
-    // 7) The rest of your cheat usage logic remains unchanged
+    // 5) If cheat not used => skip forward one day for Phase 1 or 2
     if ((phaseId === 1 || phaseId === 2) && !cheatUsed) {
-      // First time left swipe in this phase — allow cheat, move forward, and mark cheat_used=true
       const { data: nextTask, error: nextTaskError } = await supabase
         .from("taskdetails")
         .select("*")
@@ -855,7 +845,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           taskdetailsid: nextTask.taskdetailsid,
           taskstatus: "Not Started",
           task_activation_date: nextActivationDate.toISOString(),
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
         });
 
       if (insertNextTaskError) {
@@ -863,7 +853,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
         return res.status(500).json({ message: "Failed to insert next task." });
       }
 
-      // Record cheat day usage for this phase
+      // record cheat usage
       await supabase
         .from("user_phase_cheat_tracker")
         .upsert([
@@ -871,14 +861,14 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
             userid: userId,
             phaseid: phaseId,
             cheat_used: true,
-            created_at: new Date().toISOString()
-          }
+            created_at: new Date().toISOString(),
+          },
         ]);
 
       return res.status(200).json({ message: "Cheat day used - moved to next task." });
 
     } else if (phaseId === 1 || phaseId === 2) {
-      // Cheat already used — repeat same task until completed
+      // cheat used => reinsert same task
       const { error: repeatInsertError } = await supabase
         .from("userprogress")
         .insert({
@@ -886,7 +876,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           taskdetailsid: currentTask.taskdetailsid,
           taskstatus: "Not Started",
           task_activation_date: nextActivationDate.toISOString(),
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
         });
 
       if (repeatInsertError) {
@@ -897,7 +887,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       return res.status(200).json({ message: "Cheat already used - retry same task." });
 
     } else {
-      // Default behavior for Phase 3 and above — always repeat same task
+      // Phase 3+ => always re-insert same task
       const { error: normalRetryInsertError } = await supabase
         .from("userprogress")
         .insert({
@@ -905,7 +895,7 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
           taskdetailsid: currentTask.taskdetailsid,
           taskstatus: "Not Started",
           task_activation_date: nextActivationDate.toISOString(),
-          created_at: new Date().toISOString()
+          created_at: new Date().toISOString(),
         });
 
       if (normalRetryInsertError) {
@@ -924,7 +914,6 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
 
 
 
-// userprogressC: Mark current day as completed, schedule next day at local midnight
 app.post("/api/userprogressC", verifyToken, async (req, res) => {
   const userId = req.user.id;
   const { phaseId: rawPhase, taskId: rawTask } = req.body;
@@ -935,7 +924,7 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
 
     console.log("[userprogressC] Completing (phase=", phaseId, ", task=", taskId, ")");
 
-    // 1) Fetch the user's time zone from userprofile
+    // 1) Fetch user's time zone
     const { data: userProfile, error: userProfileErr } = await supabase
       .from("userprofile")
       .select("timezone")
@@ -946,11 +935,10 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       console.error("[userprogressC] Failed to fetch user timezone:", userProfileErr);
       return res.status(500).json({ message: "Failed to fetch user timezone." });
     }
-    // If no timezone is set, default to "UTC"
     const userTz = userProfile?.timezone || "UTC";
     console.log("[userprogressC] Using userTz =", userTz);
 
-    // 2) Find the current row in taskdetails
+    // 2) Find current row in taskdetails
     const { data: currentTask, error: taskError } = await supabase
       .from("taskdetails")
       .select("*")
@@ -963,7 +951,7 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Current task not found" });
     }
 
-    // 3) Mark the current task as Completed
+    // 3) Mark current task as Completed
     const { error: updateError } = await supabase
       .from("userprogress")
       .update({
@@ -978,17 +966,17 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(500).json({ message: "Failed to update task status." });
     }
 
-    // 4) Figure out the next day/phase
+    // 4) Determine next day/phase
     if (taskId < 5) {
       taskId += 1;
-      console.log("[userprogressC] Next day in same phase => (phase=", phaseId, ", day=", taskId, ")");
+      console.log(`[userprogressC] Next day in same phase => (phase=${phaseId}, day=${taskId})`);
     } else {
       phaseId += 1;
       taskId = 1;
-      console.log("[userprogressC] Jumping to next phase => (phase=", phaseId, ", day=1)");
+      console.log(`[userprogressC] Jumping to next phase => (phase=${phaseId}, day=1)`);
     }
 
-    // 5) Find nextTask in taskdetails
+    // 5) Fetch nextTask
     const { data: nextTask, error: nextTaskError } = await supabase
       .from("taskdetails")
       .select("*")
@@ -1001,26 +989,21 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(200).json({ message: "All tasks done" });
     }
 
-
-    // 6) Compute tomorrow's local midnight in userTz => convert to UTC => store
-    //    This ensures the next day becomes available at the user's local midnight
+    // 6) Compute tomorrow local midnight => convert => store in UTC
     const nowInTz = moment().tz(userTz);
     const tomorrowMidnightInTz = nowInTz.clone().add(1, "day").startOf("day");
-    const activationDateUtc = tomorrowMidnightInTz.utc().toDate();
+    const nextActivationDate = tomorrowMidnightInTz.utc().toDate();
 
-    console.log("[userprogressC] Scheduling next day at local midnight =>", activationDateUtc.toISOString());
+    console.log("[userprogressC] Scheduling next day for user local midnight =>", nextActivationDate.toISOString());
 
-    // 7) Insert the next userprogress row with "Not Started" until that date
-
-    const activationDate = new Date(Date.now() + 16 * 60 * 60 * 1000); //time lag
-
+    // 7) Insert next userprogress row
     const { error: insertError } = await supabase
       .from("userprogress")
       .insert({
         userid: userId,
         taskdetailsid: nextTask.taskdetailsid,
         taskstatus: "Not Started",
-        task_activation_date: activationDateUtc.toISOString(),
+        task_activation_date: nextActivationDate.toISOString(),
         created_at: new Date().toISOString(),
       });
 
@@ -1029,11 +1012,10 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(500).json({ message: "Failed to insert next userprogress" });
     }
 
-    console.log("[userprogressC] Inserted next day row => (phase=", phaseId, ", task=", taskId, "), activation=tomorrowMidnight local");
+    console.log(`[userprogressC] Inserted next day row => (phase=${phaseId}, task=${taskId}), activation=tomorrow local midnight`);
     return res.status(200).json({
       message: "Task completed. Next day set to tomorrow's local midnight.",
     });
-
   } catch (error) {
     console.error("[userprogressC] Error:", error);
     return res.status(500).json({ error: error.message });
