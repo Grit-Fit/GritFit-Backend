@@ -20,7 +20,7 @@ const PORT = process.env.PORT || 5050;
 app.use(express.json());
 app.use(cookieParser());
 
-const allowedOrigins = ["https://www.gritfit.site", "http://localhost:3000"];
+const allowedOrigins = ["https://www.gritfit.site","https://gritfit.vercel.app", "http://localhost:3000"];
 
 app.use(
   cors({
@@ -32,9 +32,12 @@ app.use(
       }
     },
     methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   })
 );
+
+app.options("*", cors());
 
 const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET;
@@ -784,9 +787,69 @@ app.post("/api/userprogressNC", verifyToken, async (req, res) => {
       .eq("taskid", taskId)
       .single();
 
+
     if (taskError || !currentTask) {
       return res.status(404).json({ message: "Task details not found" });
     }
+
+      const cheatUsed = cheatCheck?.cheat_used || false;
+      const nextActivationDate = new Date(Date.now() + 16 * 60 * 60 * 1000); // 10-hour delay
+
+      if ((phaseId === 1 || phaseId === 2) && !cheatUsed) {
+          // First time left swipe in this phase — allow cheat, move forward, and mark cheat_used=true
+
+          const { data: nextTask, error: nextTaskError } = await supabase
+              .from("taskdetails")
+              .select("*")
+              .eq("phaseid", phaseId)
+              .eq("taskid", taskId + 1)
+              .single();
+
+          if (nextTaskError || !nextTask) {
+              return res.status(200).json({ message: "No next task available - end of phase." });
+          }
+
+          const { error: insertNextTaskError } = await supabase
+              .from("userprogress")
+              .insert({
+                  userid: userId,
+                  taskdetailsid: nextTask.taskdetailsid,
+                  taskstatus: "Not Started",
+                  task_activation_date: nextActivationDate.toISOString(),
+                  created_at: new Date().toISOString()
+              });
+
+          if (insertNextTaskError) {
+              console.error("Failed to insert next task after cheat day:", insertNextTaskError);
+              return res.status(500).json({ message: "Failed to insert next task." });
+          }
+
+          // Record cheat day usage for this phase
+          await supabase
+              .from("user_phase_cheat_tracker")
+              .upsert([
+                  {
+                      userid: userId,
+                      phaseid: phaseId,
+                      cheat_used: true,
+                      created_at: new Date().toISOString()
+                  }
+              ]);
+
+          return res.status(200).json({ message: "Cheat day used - moved to next task." });
+
+      } else if (phaseId === 1 || phaseId === 2) {
+          // Cheat already used — repeat same task until completed
+          const { error: repeatInsertError } = await supabase
+              .from("userprogress")
+              .insert({
+                  userid: userId,
+                  taskdetailsid: currentTask.taskdetailsid,
+                  taskstatus: "Not Started",
+                  task_activation_date: nextActivationDate.toISOString(),
+                  created_at: new Date().toISOString()
+              });
+
 
     // 3) Mark current task as Not Completed
     const { error: updateError } = await supabase
@@ -991,6 +1054,7 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(200).json({ message: "All tasks done" });
     }
 
+
     // 6) Compute tomorrow's local midnight in userTz => convert to UTC => store
     //    This ensures the next day becomes available at the user's local midnight
     const nowInTz = moment().tz(userTz);
@@ -1000,6 +1064,9 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
     console.log("[userprogressC] Scheduling next day at local midnight =>", activationDateUtc.toISOString());
 
     // 7) Insert the next userprogress row with "Not Started" until that date
+
+    const activationDate = new Date(Date.now() + 16 * 60 * 60 * 1000); //time lag
+
     const { error: insertError } = await supabase
       .from("userprogress")
       .insert({
