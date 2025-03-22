@@ -9,10 +9,13 @@ const pdf = require("html-pdf");
 const handlebars = require("handlebars");
 const fs = require("fs");
 const path = require("path");
+const nodemailer = require("nodemailer");
 
 
 
 dotenv.config();
+
+require("./scheduler");
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -54,6 +57,22 @@ if (!SUPABASE_URL || !SUPABASE_API_KEY) {
 const supabase = createClient(SUPABASE_URL, SUPABASE_API_KEY, { schema: "public" });
 console.log("Supabase client created successfully");
 
+// Setup mail transport (Zoho example)
+const transporter = nodemailer.createTransport({
+  host: "smtp.zoho.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.ZOHO_USER,  // e.g. support@gritfit.site
+    pass: process.env.ZOHO_PASS,
+  },
+  tls: {
+    rejectUnauthorized: false,
+  },
+  requireTLS: false,
+  greetingTimeout: 30000, 
+});
+
 (async () => {
   try {
    
@@ -90,13 +109,12 @@ supabase
 
 
 const generateTokens = (payload) => {
-  const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: "1d" });
+  const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: "5d" });
   const refreshToken = jwt.sign(payload, JWT_REFRESH_SECRET, {
     expiresIn: "30d",
   });
   return { accessToken, refreshToken };
 };
-
 
 
 const verifyToken = (req, res, next) => {
@@ -121,6 +139,34 @@ const verifyToken = (req, res, next) => {
 app.get("/", (req, res) => {
   res.send("Hello, this is the backend connected to Supabase!");
 });
+
+
+// notifications
+app.post("/api/storeBeamsDevice", verifyToken, async (req, res) => {
+  try {
+    const { deviceId } = req.body;
+    const userId = req.user.id; // from verifyToken (JWT decode)
+
+    // deviceId === null => unsubscribing
+    // deviceId is string => subscribing
+    const { data, error } = await supabase
+      .from("userprofile")
+      .update({ beams_device_id: deviceId })
+      .eq("userid", userId);
+
+    if (error) {
+      console.error("Error storing Beams device ID:", error);
+      return res.status(500).json({ message: "Failed to update device ID" });
+    }
+    return res.status(200).json({ message: "Beams device ID updated successfully" });
+  } catch (err) {
+    console.error("Error in /api/storeBeamsDevice:", err);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+
 
 // getUserNutrition
 app.get("/api/getUserNutrition", verifyToken, async (req, res) => {
@@ -365,36 +411,41 @@ app.post("/api/restartJourney", verifyToken, async (req, res) => {
 });
 
 
+// Utility: generate 4-digit OTP
+function generateOTP() {
+  return Math.floor(1000 + Math.random() * 9000).toString(); // "1000" -> "9999"
+}
 
+// ---------------- CREATE ACCOUNT ----------------
 app.post("/api/createAccount", async (req, res) => {
   const { email, password, timezone } = req.body;
 
   try {
     console.log("Attempting to create account for:", email);
 
-
+    // 1) Check if user already exists
     const { data: existingUsers, error: checkError } = await supabase
       .from("userprofile")
       .select("email")
       .eq("email", email);
 
-    if (checkError) {
-      console.error("Error checking existing user:", checkError);
-      throw checkError;
-    }
-
+    if (checkError) throw checkError;
     if (existingUsers && existingUsers.length > 0) {
       console.log("User already exists:", email);
       return res.status(400).json({ message: "User already exists!" });
     }
 
-    // Hash the password
+    // 2) Hash the password
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
 
-    console.log("Inserting new user into database");
+    // 3) Generate a 4-digit OTP + expiry
+    const otpCode = generateOTP();  // e.g. “1234”
+    const otpExpires = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes from now
 
-    // Add new user
+    console.log("Inserting new user with is_verified=false & storing OTP...");
+
+    // 4) Insert new user row
     const { data: newUser, error } = await supabase
       .from("userprofile")
       .insert({
@@ -402,69 +453,255 @@ app.post("/api/createAccount", async (req, res) => {
         password: hashedPassword,
         timezone,
         created_at: new Date().toISOString(),
+        is_verified: false,
+        otp_code: otpCode,
+        otp_expires: otpExpires.toISOString(),
       })
       .select()
       .single();
 
     if (error) {
-      console.error("Error inserting new user:", error);
+      console.error("Error inserting user:", error);
       throw error;
     }
-
     if (!newUser) {
-      throw new Error("User created but not returned from database");
+      throw new Error("User created but not returned from DB");
     }
 
-    console.log("New user created successfully:", newUser.email);
+    console.log("New user created:", newUser.email);
 
-  
-    const tokens = generateTokens({ id: newUser.userid, email });
-    res.cookie("refreshToken", tokens.refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "Strict",
+    // 5) Send OTP via email
+    await transporter.sendMail({
+      from: process.env.ZOHO_USER,  // e.g. "support@gritfit.site"
+      to: newUser.email,
+      subject: "Verify Your GritFit Account",
+      text: `Hi there! Your GritFit account verification code is: ${otpCode}. It is valid for the next 15 minutes. For security reasons, never share this OTP with anyone. If you didn’t request this, feel free to ignore this message. Stay fit, stay safe!`,
     });
 
+    // 6) Return partial success => user must verify next
+    // NOTE: No token generation here; user is still “unverified.”
     return res.status(201).json({
-      message: "User created successfully!",
-      token: tokens.accessToken,
+      message: "User created. Please check your email for the OTP.",
     });
   } catch (error) {
     console.error("Error creating user:", error);
-    console.error("Error details:", JSON.stringify(error, null, 2));
-    res
-      .status(500)
-      .json({ message: "Error creating account", error: error.message });
+    return res.status(500).json({ 
+      message: "Error creating account",
+      error: error.message 
+    });
   }
 });
 
-// Sign in user
-app.post("/api/signIn", async (req, res) => {
-  const { email, password } = req.body;
+
+// POST /api/verifyOTP
+app.post("/api/verifyOTP", async (req, res) => {
+  const { email, code } = req.body;
 
   try {
-    // Fetch user from database
+    // 1) Find user
     const { data: users, error } = await supabase
       .from("userprofile")
       .select("*")
       .eq("email", email);
 
     if (error) throw error;
+    if (!users || users.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = users[0];
+    if (user.is_verified) {
+      return res.status(200).json({ message: "Already verified. You can sign in." });
+    }
+
+    // 2) Check OTP
+    if (!user.otp_code || !user.otp_expires) {
+      return res.status(400).json({ message: "No OTP code on file" });
+    }
+    if (user.otp_code !== code) {
+      return res.status(400).json({ message: "Invalid OTP" });
+    }
+
+    // 3) Check expiration
+    const now = new Date();
+    const expires = new Date(user.otp_expires);
+    if (now > expires) {
+      return res.status(400).json({ message: "OTP expired" });
+    }
+
+    // 4) Mark user as verified, clear OTP
+    const { error: updateErr } = await supabase
+      .from("userprofile")
+      .update({ 
+        is_verified: true, 
+        otp_code: null, 
+        otp_expires: null 
+      })
+      .eq("email", email);
+
+    if (updateErr) throw updateErr;
+
+    // 5) Generate a token for immediate login
+    const tokens = generateTokens({ id: user.userid, email: user.email });
+
+    // If you want a refresh token cookie
+    res.cookie("refreshToken", tokens.refreshToken, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Strict",
+    });
+
+    return res.status(200).json({
+      message: "Email verified successfully",
+      token: tokens.accessToken,
+    });
+  } catch (err) {
+    console.error("Error verifying OTP:", err);
+    res.status(500).json({ message: "Error verifying OTP", error: err.message });
+  }
+});
+
+function generateResetCode() {
+  return Math.floor(1000 + Math.random() * 9000).toString(); 
+}
+
+app.post("/api/forgotPassword", async (req, res) => {
+  const { email } = req.body;
+  try {
+    // 1) Check if user exists
+    const { data: users, error } = await supabase
+      .from("userprofile")
+      .select("*")
+      .eq("email", email)
+      .single();
+
+    if (error && error.code !== "PGRST116") throw error;
+    if (!users) {
+      return res.status(404).json({ message: "No user found with that email." });
+    }
+
+    // 2) Generate code + expiry
+    const resetCode = generateResetCode();
+    const expiresAt = new Date(Date.now() + 15 * 60_000); // 15 minutes
+
+    // 3) Store in DB
+    const { error: updError } = await supabase
+      .from("userprofile")
+      .update({
+        reset_code: resetCode,
+        reset_expires: expiresAt.toISOString(),
+      })
+      .eq("email", email);
+
+    if (updError) throw updError;
+
+    // 4) Send code via email
+    await transporter.sendMail({
+      from: process.env.ZOHO_USER,
+      to: email,
+      subject: "GritFit Password Reset",
+      text: `Hello!\n\nYou requested a password reset. Your reset code is: ${resetCode}\nIt expires in 15 minutes. Never share this code with anyone.\n\n- GritFit Team`,
+    });
+
+    return res.status(200).json({
+      message: "Reset code sent. Please check your email.",
+    });
+  } catch (err) {
+    console.error("forgotPassword error:", err);
+    return res.status(500).json({ message: "Failed to send reset code." });
+  }
+});
+
+app.post("/api/resetPassword", async (req, res) => {
+  const { email, resetCode, newPassword } = req.body;
+
+  try {
+    // 1) Find user by email
+    const { data: users, error } = await supabase
+      .from("userprofile")
+      .select("*")
+      .eq("email", email);
+
+    if (error) throw error;
+    if (!users || users.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const user = users[0];
+
+    // 2) Check if reset code and expiration time exist
+    if (!user.reset_code || !user.reset_expires) {
+      return res.status(400).json({ message: "No reset code on file" });
+    }
+
+    // 3) Compare the reset code
+    if (String(user.reset_code) !== String(resetCode)) {
+      return res.status(400).json({ message: "Invalid reset code" });
+    }
+
+    // 4) Check if the reset code has expired
+    const now = new Date().toISOString();
+    const expires = new Date(user.reset_expires); // Parse reset_expires as a Date object
+    if (now > expires) {
+      return res.status(400).json({ message: "Reset code expired" });
+    }
+
+    // 5) Hash the new password
+    const saltRounds = 10;
+    const hashedNew = await bcrypt.hash(newPassword, saltRounds);
+
+    // 6) Update the user's password and clear the reset code
+    const { error: updateErr } = await supabase
+      .from("userprofile")
+      .update({
+        password: hashedNew,
+        reset_code: null,
+        reset_expires: null,
+      })
+      .eq("email", email);
+
+    if (updateErr) throw updateErr;
+
+    return res.status(200).json({ message: "Password updated successfully!" });
+  } catch (err) {
+    console.error("Error in reset password:", err);
+    return res.status(500).json({ message: "Server error" });
+  }
+});
 
 
+// ---------------- SIGN IN (check is_verified) ----------------
+app.post("/api/signIn", async (req, res) => {
+  const { email, password } = req.body;
+
+  try {
+    // 1) fetch user
+    const { data: users, error } = await supabase
+      .from("userprofile")
+      .select("*")
+      .eq("email", email);
+
+    if (error) throw error;
     if (!users || users.length === 0) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
     const user = users[0];
 
-   
+    // 2) check verified
+    if (!user.is_verified) {
+      return res
+        .status(403)
+        .json({ message: "Account not verified. Please check your email for OTP." });
+    }
+
+    // 3) check password
     const passwordMatch = await bcrypt.compare(password, user.password);
     if (!passwordMatch) {
       return res.status(401).json({ message: "Invalid credentials" });
     }
 
-   
+    // 4) generate tokens
     const tokens = generateTokens({ id: user.userid, email: user.email });
     res.cookie("refreshToken", tokens.refreshToken, {
       httpOnly: true,
@@ -556,6 +793,7 @@ app.get("/api/getUserProfile", verifyToken, async (req, res) => {
     return res.status(200).json({
       username: data.username,
       email: data.email,
+      
     });
   } catch (err) {
     console.error(err);
@@ -751,7 +989,7 @@ app.post("/api/userprogressStart", verifyToken, async (req, res) => {
   }
 });
 
-// 1) Import moment-timezone at the top
+// Import moment-timezone at the top
 const moment = require("moment-timezone");
 
 app.post("/api/userprogressNC", verifyToken, async (req, res) => {
