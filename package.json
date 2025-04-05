@@ -11,6 +11,7 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
+    "@pusher/push-notifications-server": "^1.2.7",
     "@supabase/supabase-js": "^2.45.4",
     "axios": "^1.7.7",
     "bcrypt": "^5.1.1",
@@ -19,8 +20,15 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.0",
+    "firebase-admin": "^13.1.0",
+    "handlebars": "^4.7.8",
+    "html-pdf": "^3.0.1",
     "jsonwebtoken": "^9.0.2",
-    "node-cron": "^3.0.3"
+    "moment-timezone": "^0.5.47",
+    "node": "^23.8.0",
+    "node-cron": "^3.0.3",
+    "nodemailer": "^6.10.0",
+    "puppeteer": "^24.3.0"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"
