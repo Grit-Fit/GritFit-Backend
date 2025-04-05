@@ -4,10 +4,9 @@ const moment = require("moment-timezone");
 const { createClient } = require("@supabase/supabase-js");
 const axios = require("axios");
 
-
-// Pusher credentials
-const BEAMS_INSTANCE_ID = "ab36b7bc-d7f7-4be6-a812-afe25361ea37";
-const BEAMS_SECRET_KEY = "C8A575AD252A83295B739D21D0EC072B6F3A00AE66D6FF7BD73D7F617A2032FC";
+//testing
+const BEAMS_INSTANCE_ID = process.env.BEAMS_INSTANCE_ID;
+const BEAMS_SECRET_KEY = process.env.BEAMS_SECRET_KEY;
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_API_KEY);
 
