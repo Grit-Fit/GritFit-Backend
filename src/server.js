@@ -166,6 +166,561 @@ app.post("/api/storeBeamsDevice", verifyToken, async (req, res) => {
 });
 
 
+app.get("/api/searchUsers", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // from your JWT decode
+    const query = req.query.query || "";
+
+    if (!query.trim()) {
+      return res.status(200).json({ results: [] });
+    }
+
+    // 1) Search for potential matches in userprofile
+    const { data: allMatches, error } = await supabase
+    .from("userprofile")
+    .select("userid, username, email")
+    .or(
+      `username.ilike.%${query}%,email.ilike.%${query}%`
+    );
+  
+
+    if (error) throw error;
+
+    // 2) Alternatively, if you also want to match email in a single query:
+    //    With Supabase you can do:
+    /*
+    .or(
+      `username.ilike.%${query}%,email.ilike.%${query}%`
+    );
+    */
+
+    // Filter out yourself
+    const filtered = (allMatches || []).filter((u) => u.userid !== userId);
+
+    // 3) Optionally also filter out already-friends if you want
+    /*
+      const { data: existingFriends } = await supabase
+        .from("user_friends")
+        .select("friend_id")
+        .eq("user_id", userId);
+
+      const friendIds = existingFriends.map(f => f.friend_id);
+      const finalResults = filtered.filter(u => !friendIds.includes(u.userid));
+    */
+
+    return res.status(200).json({ results: filtered });
+  } catch (err) {
+    console.error("searchUsers error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.post("/api/addFriend", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // the current user from JWT
+    const { friendId } = req.body;
+
+    if (!friendId) {
+      return res.status(400).json({ error: "Missing friendId." });
+    }
+
+    // 1. Prevent adding yourself
+    if (userId === friendId) {
+      return res.status(400).json({ error: "Cannot add yourself as friend." });
+    }
+
+    // 2. Check if user already has 3 friends
+    const { data: existingFriends, error: friendError } = await supabase
+      .from("user_friends")
+      .select("friend_id")
+      .eq("user_id", userId);
+
+    if (friendError) throw friendError;
+
+    if (existingFriends && existingFriends.length >= 3) {
+      return res
+        .status(400)
+        .json({ error: "Friend limit reached (3). Cannot add more friends." });
+    }
+
+    // 3. Check if friendId is valid user in userprofile
+    const { data: foundUser, error: userError } = await supabase
+      .from("userprofile")
+      .select("*")
+      .eq("userid", friendId)
+      .single();
+
+    if (userError) throw userError;
+    if (!foundUser) {
+      return res.status(404).json({ error: "That user does not exist." });
+    }
+
+    // 4. Check if already a friend
+    const isAlreadyFriend = existingFriends.some((f) => f.friend_id === friendId);
+    if (isAlreadyFriend) {
+      return res.status(400).json({ error: "You are already friends with this user." });
+    }
+
+    // 5. Insert new row
+    const { error: insertError } = await supabase
+      .from("user_friends")
+      .insert([{ user_id: userId, friend_id: friendId }]);
+
+    if (insertError) throw insertError;
+
+    return res.status(200).json({ message: "Friend added successfully." });
+  } catch (err) {
+    console.error("addFriend error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.get("/api/friends", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    // 1) Find all friend_ids for user
+    const { data: friendRows, error: friendErr } = await supabase
+      .from("user_friends")
+      .select("friend_id")
+      .eq("user_id", userId);
+
+    if (friendErr) throw friendErr;
+    if (!friendRows || friendRows.length === 0) {
+      return res.json({ friends: [] });
+    }
+
+    // 2) Gather friendIds
+    const friendIds = friendRows.map((r) => r.friend_id);
+
+    // 3) Fetch userprofile for each friend
+    const { data: profiles, error: profileErr } = await supabase
+      .from("userprofile")
+      .select("userid, username, email")
+      .in("userid", friendIds);
+
+    if (profileErr) throw profileErr;
+
+    // 4) Format as needed by your frontend
+    const result = profiles.map((p) => ({
+      id: p.userid,
+      name: p.username,
+      email: p.email,
+    }));
+    return res.json({ friends: result });
+  } catch (err) {
+    console.error("GET /api/friends error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.get("/api/getFriendRequests", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    // With Supabase, if you've declared a foreign key:
+    // friend_requests.from_user -> userprofile.userid
+    // friend_requests.to_user   -> userprofile.userid
+    // Then you can do something like:
+    const { data: requests, error } = await supabase
+      .from("friend_requests")
+      .select(`
+        id,
+        status,
+        created_at,
+        from_user (userid, username, email),
+        to_user
+      `)
+      .eq("to_user", userId)
+      .eq("status", "pending");
+
+    if (error) throw error;
+
+    // "from_user" will be an object like { userid, username, email }
+    return res.json({ requests });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/removeFriend/:friendId", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { friendId } = req.params;
+
+    // 1) Delete both directions: (userId->friendId) and (friendId->userId)
+    const { error } = await supabase
+      .from("user_friends")
+      .delete()
+      .or(
+        `and(user_id.eq.${userId},friend_id.eq.${friendId}),and(user_id.eq.${friendId},friend_id.eq.${userId})`
+      );
+
+    if (error) throw error;
+
+    return res.json({ message: "Friend removed successfully." });
+  } catch (err) {
+    console.error("DELETE /api/removeFriend/:friendId error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.post("/api/sendFriendRequest", verifyToken, async (req, res) => {
+  try {
+    const fromUser = req.user.id;
+    const { toUserId } = req.body;
+
+    if (!toUserId) {
+      return res.status(400).json({ error: "Missing toUserId." });
+    }
+    if (fromUser === toUserId) {
+      return res.status(400).json({ error: "Cannot send request to yourself." });
+    }
+
+    // Check if request already exists or if user already a friend, etc.
+    // For brevity, we won't do that here. Just insert a new request.
+
+    const { error: insertErr } = await supabase
+      .from("friend_requests")
+      .insert([
+        { from_user: fromUser, to_user: toUserId, status: "pending" },
+      ]);
+
+    if (insertErr) throw insertErr;
+
+    return res.json({ message: "Friend request sent." });
+  } catch (err) {
+    console.error("POST /api/sendFriendRequest error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/respondFriendRequest", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // the "to_user"
+    const { requestId, accept } = req.body;
+
+    // 1) Find that request
+    const { data: reqRow, error: findErr } = await supabase
+      .from("friend_requests")
+      .select("*")
+      .eq("id", requestId)
+      .single();
+
+    if (findErr) throw findErr;
+    if (!reqRow) {
+      return res.status(404).json({ error: "Friend request not found." });
+    }
+    if (reqRow.to_user !== userId) {
+      return res.status(403).json({ error: "Not authorized to respond." });
+    }
+    if (reqRow.status !== "pending") {
+      return res.status(400).json({ error: "Request is not pending." });
+    }
+
+    if (accept) {
+      // 2a) Accept => set request to 'accepted'
+      const { error: updateErr } = await supabase
+        .from("friend_requests")
+        .update({ status: "accepted" })
+        .eq("id", requestId);
+
+      if (updateErr) throw updateErr;
+
+      // 2b) Insert symmetrical rows in user_friends (both ways)
+      // You can also check each user’s friend limit first, if desired.
+      const { error: insertFriendsErr } = await supabase
+        .from("user_friends")
+        .insert([
+          { user_id: reqRow.from_user, friend_id: reqRow.to_user },
+          { user_id: reqRow.to_user, friend_id: reqRow.from_user },
+        ]);
+
+      if (insertFriendsErr) throw insertFriendsErr;
+
+      return res.json({ message: "Friend request accepted." });
+    } else {
+      // 3) Reject => set request to 'rejected'
+      const { error: rejectErr } = await supabase
+        .from("friend_requests")
+        .update({ status: "rejected" })
+        .eq("id", requestId);
+
+      if (rejectErr) throw rejectErr;
+
+      return res.json({ message: "Friend request rejected." });
+    }
+  } catch (err) {
+    console.error("respondFriendRequest error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/createHelpSessions", verifyToken, async (req, res) => {
+  try {
+    const userA = req.user.id;  // the help seeker
+    const { taskdetailsid, friendIds } = req.body;
+
+    if (!taskdetailid || !friendIds?.length) {
+      return res.status(400).json({ error: "Missing taskdetailid or friendIds." });
+    }
+
+    // Build rows for each friend
+    const sessionsToInsert = friendIds.map((friendId) => ({
+      user_a: userA,
+      user_b: friendId,
+      taskdetailsid: taskdetailsid
+    }));
+
+    const { data, error } = await supabase
+      .from("help_chat_sessions")
+      .insert(sessionsToInsert)
+      .select(); // get created rows back
+
+    if (error) throw error;
+
+    // Return the newly created session rows, each with an 'id'
+    return res.json({ sessions: data });
+  } catch (err) {
+    console.error("createHelpSessions error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+/*
+  2) POST /api/sendHelpMessage
+     Add a new message to a session, enforcing the 4-message limit.
+     Body: { sessionId, content }
+*/
+app.post("/api/sendHelpMessage", verifyToken, async (req, res) => {
+  try {
+    const senderId = req.user.id;
+    const { sessionId, content } = req.body;
+
+    if (!sessionId || !content?.trim()) {
+      return res.status(400).json({ error: "Missing sessionId or content." });
+    }
+
+    // 1) Check if session actually belongs to this user or user is the friend
+    const { data: sessionData, error: sessionErr } = await supabase
+      .from("help_chat_sessions")
+      .select("*")
+      .eq("id", sessionId)
+      .single();
+
+    if (sessionErr || !sessionData) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    // user must be user_a or user_b
+    if (![sessionData.user_a, sessionData.user_b].includes(senderId)) {
+      return res.status(403).json({ error: "Not authorized for this session." });
+    }
+
+    // 2) Count how many messages exist
+    const { data: existingMsgs, error: msgErr } = await supabase
+      .from("help_chat_messages")
+      .select("id")
+      .eq("session_id", sessionId);
+
+    if (msgErr) throw msgErr;
+    if (existingMsgs.length >= 4) {
+      return res.status(400).json({ error: "Max 4 messages reached." });
+    }
+
+    // 3) Insert new message
+    const { data: newMsg, error: insertErr } = await supabase
+      .from("help_chat_messages")
+      .insert([
+        { 
+          session_id: sessionId, 
+          sender_id: senderId, 
+          content: content.trim() // or encrypted content
+        }
+      ])
+      .select()
+      .single();
+
+    if (insertErr) throw insertErr;
+
+    return res.json({ message: newMsg });
+  } catch (err) {
+    console.error("sendHelpMessage error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.post("/api/sendHelpRequest", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // the help-seeker
+    const { phaseNumber, dayNumber, message } = req.body;
+
+    // 1) Validate input
+    if (!phaseNumber || !dayNumber || !message?.trim()) {
+      return res.status(400).json({ error: "Missing phaseNumber, dayNumber, or message." });
+    }
+
+    // 2) Find user’s friends
+    const { data: friendRows, error: friendErr } = await supabase
+      .from("user_friends")
+      .select("friend_id")
+      .eq("user_id", userId);
+    if (friendErr) throw friendErr;
+
+    if (!friendRows || friendRows.length === 0) {
+      return res.status(400).json({ error: "You have no friends to send help request to." });
+    }
+
+    // 3) Get taskdetailid from (phaseNumber, dayNumber)
+    const { data: taskDetails, error: taskErr } = await supabase
+      .from("taskdetails") 
+      .select("taskdetailsid, taskdesc")
+      .eq("phaseid", phaseNumber)
+      .eq("taskid", dayNumber)
+      .single();
+
+    if (taskErr || !taskDetails) {
+      return res.status(404).json({ error: "Task detail not found for the given phase/day." });
+    }
+    const { taskdetailsid, taskdesc } = taskDetails;
+
+    // 4) [New] Check if user has already created a help request for this task
+    //    i.e. any session with (user_a = current user) AND (taskdetailid = found ID)
+    const { data: existingSessions, error: checkErr } = await supabase
+      .from("help_chat_sessions")
+      .select("id")
+      .match({ user_a: userId, taskdetailsid });
+
+    if (checkErr) throw checkErr;
+
+    if (existingSessions.length > 0) {
+      // This means user has already created a help chat for that task
+      return res.status(400).json({
+        error: "You have already requested help for this task.",
+      });
+    }
+
+    // 5) Create new help_chat_sessions for each friend
+    const sessionsToInsert = friendRows.map((f) => ({
+      user_a: userId,
+      user_b: f.friend_id,
+      taskdetailsid: taskdetailsid,
+    }));
+
+    const { data: insertedSessions, error: insertErr } = await supabase
+      .from("help_chat_sessions")
+      .insert(sessionsToInsert)
+      .select();
+    if (insertErr) throw insertErr;
+
+    // 6) Insert the initial message
+    // Optionally embed the taskdesc in the first message for context
+    const combinedMessage = message.trim();
+
+    const messagesToInsert = insertedSessions.map((sess) => ({
+      session_id: sess.id,
+      sender_id: userId,
+      content: combinedMessage,
+    }));
+
+    const { error: msgErr } = await supabase
+      .from("help_chat_messages")
+      .insert(messagesToInsert);
+    if (msgErr) throw msgErr;
+
+    return res.json({
+      message: "Help request sent to all friends!",
+      sessionsCreated: insertedSessions.length,
+      sessions: insertedSessions,
+    });
+  } catch (err) {
+    console.error("sendHelpRequest error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+
+
+/*
+  3) GET /api/helpMessages/:sessionId
+     Return all messages for a session (in ascending order).
+     The client can decrypt if needed.
+*/
+app.get("/api/helpMessages/:sessionId", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { sessionId } = req.params;
+
+    // Check session
+    const { data: sessionData, error: sessionErr } = await supabase
+      .from("help_chat_sessions")
+      .select("*")
+      .eq("id", sessionId)
+      .single();
+
+    if (sessionErr || !sessionData) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    if (![sessionData.user_a, sessionData.user_b].includes(userId)) {
+      return res.status(403).json({ error: "Not authorized for this session." });
+    }
+
+    // Fetch messages
+    const { data: msgs, error: msgsErr } = await supabase
+      .from("help_chat_messages")
+      .select("id, sender_id, content, created_at, sender:userprofile(username)")
+      .eq("session_id", sessionId)
+      .order("created_at", { ascending: true });
+
+    if (msgsErr) throw msgsErr;
+
+    const transformed = msgs.map((m) => ({
+      ...m,
+      // Convert from UTC to Asia/Kolkata, for example:
+      formatted_time: moment.utc(m.created_at).tz("Asia/Kolkata").format("YYYY-MM-DD HH:mm"),
+    }));
+
+    return res.json({ messages: transformed });
+  } catch (err) {
+    console.error("GET /helpMessages error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+app.get("/api/myHelpSessions", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    const { data: sessions, error } = await supabase
+      .from("help_chat_sessions")
+      .select(`
+        id,
+        user_a,
+        user_b,
+        taskdetails (
+          taskdesc
+        ),
+        user_a_profile: userprofile!help_chat_sessions_user_a_fkey ( userid, username ),
+        user_b_profile: userprofile!help_chat_sessions_user_b_fkey ( userid, username )
+      `)
+      // Return all sessions where I'm user_a or user_b
+      .or(`user_a.eq.${userId},user_b.eq.${userId}`);
+
+    if (error) throw error;
+    return res.json({ sessions });
+  } catch (err) {
+    console.error("myHelpSessions error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+
 
 
 // getUserNutrition
