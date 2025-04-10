@@ -643,13 +643,6 @@ app.post("/api/sendHelpRequest", verifyToken, async (req, res) => {
 });
 
 
-
-
-/*
-  3) GET /api/helpMessages/:sessionId
-     Return all messages for a session (in ascending order).
-     The client can decrypt if needed.
-*/
 app.get("/api/helpMessages/:sessionId", verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -718,6 +711,161 @@ app.get("/api/myHelpSessions", verifyToken, async (req, res) => {
     return res.status(500).json({ error: err.message });
   }
 });
+
+app.post("/api/markMessageHelpful", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { messageId, rating } = req.body;
+
+    // rating should be one of: "helpful", "somewhat", or "not".
+    if (!messageId || !rating) {
+      return res.status(400).json({ error: "Missing messageId or rating." });
+    }
+    if (!["helpful", "somewhat", "not"].includes(rating)) {
+      return res.status(400).json({ error: "Invalid rating option." });
+    }
+
+    // A small map from rating -> gems.
+    const ratingToGems = {
+      helpful: 10,
+      somewhat: 5,
+      not: 0,
+    };
+
+    // 1) Fetch the message
+    const { data: messageData, error: msgErr } = await supabase
+      .from("help_chat_messages")
+      .select("*")
+      .eq("id", messageId)
+      .single();
+    if (msgErr || !messageData) {
+      return res.status(404).json({ error: "Message not found." });
+    }
+
+    // 2) Retrieve the chat session and verify user is a participant
+    const { data: sessionData, error: sessErr } = await supabase
+      .from("help_chat_sessions")
+      .select("*")
+      .eq("id", messageData.session_id)
+      .single();
+    if (sessErr || !sessionData) {
+      return res.status(404).json({ error: "Session not found." });
+    }
+    if (![sessionData.user_a, sessionData.user_b].includes(userId)) {
+      return res.status(403).json({ error: "Not authorized to rate this message." });
+    }
+
+    // 3) Prevent rating your own message
+    if (messageData.sender_id === userId) {
+      return res
+        .status(400)
+        .json({ error: "You cannot rate your own message." });
+    }
+
+    // 4) Check if any message in the session already has a rating
+    const { data: existingRatings, error: helpfulErr } = await supabase
+      .from("help_chat_messages")
+      .select("id")
+      .eq("session_id", messageData.session_id)
+      .in("rating", ["helpful", "somewhat", "not"]); // any rating
+    if (helpfulErr) {
+      return res
+        .status(500)
+        .json({ error: "Error checking for existing ratings in this session." });
+    }
+    if (existingRatings && existingRatings.length > 0) {
+      // Means a message has already been rated
+      return res
+        .status(400)
+        .json({ error: "A message in this chat has already been rated." });
+    }
+
+    // 5) Ensure this message is not the first message of the session (the "help request")
+    const { data: firstMessage, error: firstMsgErr } = await supabase
+      .from("help_chat_messages")
+      .select("id, created_at")
+      .eq("session_id", messageData.session_id)
+      .order("created_at", { ascending: true })
+      .limit(1)
+      .single();
+    if (firstMsgErr || !firstMessage) {
+      return res.status(500).json({ error: "Error retrieving the first message." });
+    }
+    if (firstMessage.id === messageData.id) {
+      return res
+        .status(400)
+        .json({ error: "You cannot rate the initial help request." });
+    }
+
+    // 6) Update the message with the given rating
+    const { error: updateMsgErr } = await supabase
+      .from("help_chat_messages")
+      .update({
+        rating,
+        helpful_by: userId,
+      })
+      .eq("id", messageId);
+    if (updateMsgErr) throw updateMsgErr;
+
+    // 7) Award gems depending on the rating
+    const gemAward = ratingToGems[rating];
+    if (gemAward > 0) {
+      const friendId = messageData.sender_id;
+      const { data: friendProfile, error: friendErr } = await supabase
+        .from("userprofile")
+        .select("gems")
+        .eq("userid", friendId)
+        .single();
+      if (friendErr || !friendProfile) {
+        return res.status(404).json({ error: "Sender's profile not found." });
+      }
+      const newGems = (friendProfile.gems || 0) + gemAward;
+      const { error: updateGemErr } = await supabase
+        .from("userprofile")
+        .update({ gems: newGems })
+        .eq("userid", friendId);
+      if (updateGemErr) throw updateGemErr;
+    }
+
+    return res.json({
+      message: `Message rated as "${rating}". Awarded ${gemAward} gems to the sender.`,
+    });
+  } catch (err) {
+    console.error("Error in markMessageHelpful:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/getUserGems", verifyToken, async (req, res) => {
+  try {
+    // The user ID might come from your auth middleware
+    const userId = req.user.id;  
+    // If you don’t have a verifyToken, you could read from query or body:
+    // const userId = req.query.userId; 
+
+    // Fetch gems from the userprofile table
+    const { data, error } = await supabase
+      .from("userprofile")
+      .select("gems")
+      .eq("userid", userId)
+      .single();
+
+    if (error) {
+      console.error("Error fetching user gems:", error);
+      return res.status(500).json({ error: "Internal server error" });
+    }
+
+    if (!data) {
+      return res.status(404).json({ error: "User profile not found" });
+    }
+
+    return res.json({ gems: data.gems });
+  } catch (err) {
+    console.error("Unexpected error:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
 
 
 
