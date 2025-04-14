@@ -836,6 +836,25 @@ app.post("/api/markMessageHelpful", verifyToken, async (req, res) => {
   }
 });
 
+app.post("/api/updateAvatarColor", verifyToken, async (req, res) => {
+  try {
+    const { newAvatarColor } = req.body;
+    const email = req.user.email;
+
+    const { data, error } = await supabase
+      .from("userprofile")
+      .update({ avatar_color: newAvatarColor })
+      .eq("email", email);
+
+    if (error) throw error;
+
+    return res.status(200).json({ message: "Avatar color updated successfully", data });
+  } catch (err) {
+    console.error("Error updating avatar color:", err);
+    res.status(500).json({ message: "Error updating avatar color", error: err.message });
+  }
+});
+
 app.get("/api/getUserGems", verifyToken, async (req, res) => {
   try {
     // The user ID might come from your auth middleware
@@ -1479,7 +1498,7 @@ app.get("/api/getUserProfile", verifyToken, async (req, res) => {
     const email = req.user.email; // from the JWT via verifyToken
     const { data, error } = await supabase
       .from("userprofile")
-      .select("username", "email")
+      .select("username, email, avatar_color")
       .eq("email", email)
       .single();
 
