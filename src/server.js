@@ -1515,6 +1515,7 @@ app.get("/api/getUserProfile", verifyToken, async (req, res) => {
     return res.status(200).json({
       username: data.username,
       email: data.email,
+      avatar_color: data.avatar_color,
       
     });
   } catch (err) {
