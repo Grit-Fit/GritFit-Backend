@@ -885,6 +885,53 @@ app.get("/api/getUserGems", verifyToken, async (req, res) => {
   }
 });
 
+app.post("/api/updateUserGems", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id; // or use email if that’s your key
+    const { newGemCount } = req.body;
+    if (typeof newGemCount !== "number") {
+      return res.status(400).json({ error: "Invalid gem count" });
+    }
+
+    const { error } = await supabase
+      .from("userprofile")
+      .update({ gems: newGemCount })
+      .eq("userid", userId); 
+
+    if (error) throw error;
+
+    return res.json({ success: true, gems: newGemCount });
+  } catch (err) {
+    console.error("updateUserGems error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/logBonusMission", verifyToken, async (req, res) => {
+  try {
+    const email = req.user.email; 
+    const { result } = req.body; 
+    if (!result || (result !== "reset" && result !== "tripled")) {
+      return res.status(400).json({ error: "Invalid bonus mission result" });
+    }
+    
+    const { error } = await supabase
+      .from("userprofile")
+      .update({ bonus_used: true })
+      .eq("email", email);
+    
+    if (error) throw error;
+    
+    return res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("logBonusMission error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+
+
+
 
 
 
