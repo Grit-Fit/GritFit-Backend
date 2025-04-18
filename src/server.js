@@ -857,12 +857,8 @@ app.post("/api/updateAvatarColor", verifyToken, async (req, res) => {
 
 app.get("/api/getUserGems", verifyToken, async (req, res) => {
   try {
-    // The user ID might come from your auth middleware
-    const userId = req.user.id;  
-    // If you don’t have a verifyToken, you could read from query or body:
-    // const userId = req.query.userId; 
 
-    // Fetch gems from the userprofile table
+    const userId = req.user.id;  
     const { data, error } = await supabase
       .from("userprofile")
       .select("gems")
@@ -896,7 +892,7 @@ app.post("/api/updateUserGems", verifyToken, async (req, res) => {
     const { error } = await supabase
       .from("userprofile")
       .update({ gems: newGemCount })
-      .eq("userid", userId); 
+      .eq("userid", userId); // Adjust field name according to your schema
 
     if (error) throw error;
 
@@ -907,32 +903,168 @@ app.post("/api/updateUserGems", verifyToken, async (req, res) => {
   }
 });
 
-app.post("/api/logBonusMission", verifyToken, async (req, res) => {
+app.post("/api/unlockBonus", verifyToken, async (req, res) => {
+  const userId = req.user.id;
+  const { phaseId } = req.body;  // phaseId sent from frontend
+
   try {
-    const email = req.user.email; 
-    const { result } = req.body; 
-    if (!result || (result !== "reset" && result !== "tripled")) {
-      return res.status(400).json({ error: "Invalid bonus mission result" });
-    }
-    
-    const { error } = await supabase
+    // Get the current phase from the user profile if not provided
+    const { data: profile } = await supabase
       .from("userprofile")
-      .update({ bonus_used: true })
-      .eq("email", email);
-    
+      .select("current_phase, gems")
+      .eq("userid", userId)
+      .single();
+
+    const currentPhase = phaseId || profile.current_phase || 1; 
+    const now = new Date().toISOString();
+    const validUntil = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+
+    // Fetch a random task for the given phase
+    const { data: tasks, error } = await supabase
+    .from("bonus_tasks")
+    .select("id, description")
+    .eq("current_phase", currentPhase)
+    .order("id", { ascending: true }) 
+    .limit(1);
+
     if (error) throw error;
-    
-    return res.status(200).json({ success: true });
+    const task = tasks[0];
+
+    // Check if the user has enough gems
+    if (profile.gems < 50) {
+      return res.status(400).json({ error: "Not enough gems." });
+    }
+
+    // Deduct gems and set bonus unlocked time
+    await supabase
+      .from("userprofile")
+      .update({
+        gems: profile.gems - 50,
+        bonus_unlocked_at: now,
+        bonus_valid_until: validUntil,
+        bonus_used: false,
+        bonus_task_id: task.id  
+      })
+      .eq("userid", userId);
+
+    res.json({
+      newGems: profile.gems - 50,
+      bonus_task_id: task.id,
+      bonus_task_description: task.description,
+      bonus_unlocked_at: now,
+      bonus_valid_until: validUntil
+    });
   } catch (err) {
-    console.error("logBonusMission error:", err);
+    console.error("unlockBonus error:", err);
     return res.status(500).json({ error: err.message });
   }
 });
 
+app.get("/api/bonusStatus", verifyToken, async (req, res) => {
+  const userId = req.user.id;
+  try {
+    // fetch profile
+    const { data: prof, error: profErr } = await supabase
+      .from("userprofile")
+      .select("gems, bonus_valid_until, bonus_used, bonus_task_id, current_phase")
+      .eq("userid", userId)
+      .single();
+    if (profErr) throw profErr;
+
+    // if there’s a task assigned, fetch its description
+    let taskDesc = null;
+    if (prof.bonus_task_id) {
+      const { data: task, error: taskErr } = await supabase
+        .from("bonus_tasks")
+        .select("description")
+        .eq("id", prof.bonus_task_id)
+        .single();
+      if (taskErr) throw taskErr;
+      taskDesc = task.description;
+    }
+
+    res.json({
+      gems: prof.gems,
+      unlocked: !!(prof.bonus_valid_until && !prof.bonus_used && new Date(prof.bonus_valid_until) > new Date()),
+      validUntil: prof.bonus_valid_until,
+      bonusUsed: prof.bonus_used,
+      phase: prof.current_phase,
+      bonusTaskId: prof.bonus_task_id,
+      bonusTaskDescription: taskDesc
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
+app.post("/api/logBonusMission", verifyToken, async (req, res) => {
+  const userId = req.user.id;
+  const { result } = req.body;
+  
+  try {
+    const { data, error } = await supabase
+      .from("userprofile")
+      .update({ bonus_used: true })  
+      .eq("userid", userId);
+    
+    if (error) throw error;
 
+    res.json({ success: true });
+  } catch (err) {
+    console.error("logBonusMission error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
+app.get("/api/currentPhase", verifyToken, async (req, res) => {
+  const userId = req.user.id;
+
+  try {
+    const { data: prog, error: progErr } = await supabase
+      .from("userprogress")
+      .select("taskdetailsid")
+      .eq("userid", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+    if (progErr) throw progErr;
+    if (!prog) return res.status(404).json({ error: "No progress found." });
+
+    // 2) fetch that taskdetails row to get its phaseid
+    const { data: detail, error: detErr } = await supabase
+      .from("taskdetails")
+      .select("phaseid")
+      .eq("taskdetailsid", prog.taskdetailsid)
+      .single();
+    if (detErr) throw detErr;
+    if (!detail) return res.status(404).json({ error: "Task details not found." });
+
+    return res.json({ phase: detail.phaseid });
+  } catch (err) {
+    console.error("GET /api/currentPhase error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/getTaskById/:id", async (req, res) => {
+  const { id } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from("bonus_tasks")
+      .select("id, description")
+      .eq("id", id)
+      .single();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error("getTaskById error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 
@@ -1545,7 +1677,7 @@ app.get("/api/getUserProfile", verifyToken, async (req, res) => {
     const email = req.user.email; // from the JWT via verifyToken
     const { data, error } = await supabase
       .from("userprofile")
-      .select("username, email, avatar_color")
+      .select("username, email, avatar_color , gems, bonus_used, bonus_task_id, current_phase")
       .eq("email", email)
       .single();
 
