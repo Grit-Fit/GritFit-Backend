@@ -140,6 +140,670 @@ app.get("/", (req, res) => {
   res.send("Hello, this is the backend connected to Supabase!");
 });
 
+app.get("/api/admin/analytics", verifyToken, async (req, res) => {
+  try {
+    const [{ count: totalUsers }, { count: completedTasks }] = await Promise.all([
+      supabase.from("userprofile").select("*", { count: "exact", head: true }),
+      supabase
+        .from("userprogress")
+        .select("taskstatus", { count: "exact", head: true })
+        .eq("taskstatus", "Completed"),
+    ]);
+
+    return res.json({
+      totalUsers,
+      completedTasks,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("Admin analytics error:", err);
+    return res.status(500).json({ error: "Failed to fetch analytics" });
+  }
+});
+
+app.get("/api/admin/engagementStats", verifyToken, async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayISO = today.toISOString();
+
+    // 1️⃣ Fetch progress data
+    const { data: progressData = [], error: progressErr } = await supabase
+      .from("userprogress")
+      .select("userid, taskstatus, completion_date")
+      .gte("completion_date", todayISO);
+    if (progressErr) throw progressErr;
+
+    // 2️⃣ Extract unique users
+    const userIds = [...new Set(progressData.map((item) => item.userid))];
+
+    // 3️⃣ Fetch profiles
+    let profiles = [];
+    if (userIds.length > 0) {
+      const { data: profileData = [], error: profileErr } = await supabase
+        .from("userprofile")
+        .select("userid, username, email")
+        .in("userid", userIds);
+      if (profileErr) throw profileErr;
+      profiles = profileData;
+    }
+
+    // 4️⃣ Map profiles
+    const profileMap = {};
+    profiles.forEach((p) => {
+      profileMap[p.userid] = { name: p.username, email: p.email };
+    });
+
+    // 5️⃣ Build DAU user list
+    const dauUsers = progressData.map((row) => ({
+      userid: row.userid,
+      name: profileMap[row.userid]?.name || "Unknown",
+      email: profileMap[row.userid]?.email || "Unknown",
+      status: row.taskstatus,
+      completion_time: row.completion_date,
+    }));
+
+    // 6️⃣ Swipe stats
+    const swipeCounts = { Completed: 0, "Not Completed": 0, Help: 0 };
+    progressData.forEach((item) => {
+      if (item.taskstatus === "Completed") swipeCounts.Completed++;
+      else if (item.taskstatus === "Not Completed") swipeCounts["Not Completed"]++;
+    });
+
+    // 7️⃣ Help stat
+    const { data: helpSessions = [], error: helpErr } = await supabase
+      .from("help_chat_sessions")
+      .select("user_a")
+      .gte("created_at", todayISO);
+    if (helpErr) throw helpErr;
+
+    swipeCounts.Help = helpSessions.length;
+
+    // ✅ Response
+    return res.json({
+      dau: userIds.length,
+      swipeCounts,
+      dauUsers,
+    });
+  } catch (err) {
+    console.error("engagementStats error:", err);
+    return res.status(500).json({ error: "Failed to fetch engagement stats" });
+  }
+});
+
+app.get("/api/admin/forgotPasswordStats", async (req, res) => {
+  const projectId = "149785";     // e.g. 123
+  const insightId = "KMMhfx25";     // e.g. 456
+
+  try {
+    const response = await fetch(`https://app.posthog.com/api/projects/${projectId}/insights/${insightId}/result/`, {
+      headers: {
+        Authorization: `Bearer ${process.env.POSTHOG_API_KEY}`, // from .env
+        "Content-Type": "application/json",
+      },
+    });
+
+    const json = await response.json();
+    return res.json({ insightData: json });
+  } catch (err) {
+    console.error("PostHog Insight fetch error:", err);
+    return res.status(500).json({ error: "Failed to fetch PostHog insight data" });
+  }
+});
+
+
+
+app.get("/api/admin/insights", async (req, res) => {
+  const insightMap = {
+    forgotPassword: "KMMhfx25",
+    bonusCompleted: "U9orR0qO",
+  };
+
+  try {
+    const fetchInsight = async (id) => {
+      const response = await fetch(
+        `https://app.posthog.com/api/project/149785/insights/${id}/result/`,
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.POSTHOG_API_KEY}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      return response.json();
+    };
+
+    const results = await Promise.all(
+      Object.entries(insightMap).map(async ([key, id]) => {
+        const result = await fetchInsight(id);
+        return { key, result };
+      })
+    );
+
+    const combined = {};
+    results.forEach(({ key, result }) => {
+      combined[key] = result;
+    });
+
+    res.json(combined);
+  } catch (err) {
+    console.error("PostHog insights fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch insight data" });
+  }
+});
+
+// 🔄 Replaced static insight fetch with dynamic Query API for real-time counts
+app.post("/api/admin/posthog/events", async (req, res) => {
+  const apiKey = process.env.POSTHOG_API_KEY;
+  const { eventNames = [], days = 7 } = req.body;
+
+  if (!Array.isArray(eventNames) || eventNames.length === 0) {
+    return res.status(400).json({ error: "eventNames array is required" });
+  }
+
+  try {
+    // Helper to fetch the count for one event
+    const fetchCount = async (event) => {
+      const response = await fetch(
+        `https://us.posthog.com/api/project/149785/query/`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            kind: "TrendsQuery",
+            query: {
+              series: [{ event, kind: "EventsQuery" }],
+              dateRange: { date_from: `-${days}d` },
+            },
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errTxt = await response.text();
+        throw new Error(`PostHog query failed for '${event}': ${errTxt}`);
+      }
+
+      const json = await response.json();
+      // Sum up the series data array
+      const count = Array.isArray(json[0]?.data)
+        ? json[0].data.reduce((sum, v) => sum + (v || 0), 0)
+        : 0;
+      return { event, count };
+    };
+
+    // Parallel fetch all events
+    const results = await Promise.all(eventNames.map(fetchCount));
+
+    // Convert to object map
+    const eventCounts = {};
+    results.forEach(({ event, count }) => {
+      eventCounts[event] = count;
+    });
+
+    res.json(eventCounts);
+  } catch (error) {
+    console.error("PostHog dynamic events error:", error);
+    res.status(500).json({ error: "Failed to fetch PostHog event data" });
+  }
+});
+
+
+app.get("/api/admin/userProgressMetrics", verifyToken, async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayISO = today.toISOString();
+
+
+    const { data: progressRows } = await supabase
+      .from("userprogress")
+      .select("userid")
+      .gte("created_at", todayISO);
+    const dau = new Set(progressRows.map((r) => r.userid)).size;
+
+
+    const { count: completedTasks } = await supabase
+      .from("userprogress")
+      .select("*", { head: true, count: "exact" })
+      .eq("taskstatus", "Completed");
+
+ 
+    const { count: notCompletedTasks } = await supabase
+      .from("userprogress")
+      .select("*", { head: true, count: "exact" })
+      .eq("taskstatus", "Not Completed");
+
+    const { count: helpRequests } = await supabase
+      .from("help_chat_sessions")
+      .select("*", { head: true, count: "exact" })
+      .gte("created_at", todayISO);
+
+
+    const { count: helpMessages } = await supabase
+      .from("help_chat_messages")
+      .select("*", { head: true, count: "exact" })
+      .gte("created_at", todayISO);
+
+
+    const avgMessagesPerSession =
+      helpRequests > 0 ? (helpMessages / helpRequests).toFixed(2) : 0;
+
+    // 8. Drop‑off Points: how many distinct tasks ended “Not Completed”
+    const { data: dropped } = await supabase
+      .from("userprogress")
+      .select("taskdetailsid", { distinct: true })
+      .eq("taskstatus", "Not Completed");
+    const dropOffPoints = dropped.length;
+
+    // Return all metrics
+    res.json({
+      dau,
+      completedTasks,
+      notCompletedTasks,
+      helpRequests,
+      helpMessages,
+      avgMessagesPerSession,
+      dropOffPoints,
+    });
+  } catch (err) {
+    console.error("userProgressMetrics error:", err);
+    res.status(500).json({ error: "Failed to fetch user progress metrics" });
+  }
+});
+
+app.get("/api/admin/engagementStats", verifyToken, async (req, res) => {
+  try {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayISO = today.toISOString();
+
+
+    const { data: helpSessions = [], error: helpErr } = await supabase
+      .from("help_chat_sessions")
+      .select("user_a, created_at")
+      .gte("created_at", todayISO);
+    if (helpErr) throw helpErr;
+
+    // 3) Grab the unique user_a IDs
+    const helpUserIds = [...new Set(helpSessions.map((s) => s.user_a))];
+
+    // 4) Fetch their profiles
+    let helpProfiles = [];
+    if (helpUserIds.length) {
+      const { data: hp, error: hpErr } = await supabase
+        .from("userprofile")
+        .select("userid, username, email")
+        .in("userid", helpUserIds);
+      if (hpErr) throw hpErr;
+      helpProfiles = hp;
+    }
+
+    // 5) Build a quick lookup map
+    const profileMap = {};
+    helpProfiles.forEach((p) => {
+      profileMap[p.userid] = { name: p.username, email: p.email };
+    });
+
+    // 6) Map into a helpUsers array with full details
+    const helpUsers = helpSessions.map((s) => ({
+      userid: s.user_a,
+      name: profileMap[s.user_a]?.name || "Unknown",
+      email: profileMap[s.user_a]?.email || "Unknown",
+      requested_at: s.created_at,
+    }));
+
+    // 7) Now return everything (plus your existing dau, swipeCounts, dauUsers…)
+    return res.json({
+      dau,
+      swipeCounts,
+      dauUsers,
+      helpUsers,
+    });
+  } catch (err) {
+    console.error("engagementStats error:", err);
+    return res.status(500).json({ error: "Failed to fetch engagement stats" });
+  }
+});
+
+app.get("/api/admin/users", verifyToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase   // 👈 select the right column names
+      .from("userprofile")
+      .select("userid, username, email")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    return res.json(data);              // ⇒ [{ userid: "...", username:"Dhruv", email:"..."}, …]
+  } catch (err) {
+    console.error("users list error:", err);
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+// GET all the core analytics in one shot
+app.get("/api/admin/fullAnalytics", verifyToken, async (req, res) => {
+  try {
+    // midnight today
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayISO = today.toISOString();
+
+    // 1) DAUs (distinct users who did >1 progress update today)
+    const { count: dau } = await supabase
+      .from("userprogress")
+      .select("userid", { count: "exact", head: true })
+      .gte("created_at", todayISO);
+
+    // 2) Completed / Not Completed Tasks (all-time)
+    const [{ count: completedTasks }, { count: notCompletedTasks }] = await Promise.all([
+      supabase
+        .from("userprogress")
+        .select("*", { count: "exact", head: true })
+        .eq("taskstatus", "Completed"),
+      supabase
+        .from("userprogress")
+        .select("*", { count: "exact", head: true })
+        .eq("taskstatus", "Not Completed"),
+    ]);
+
+    // 3) Drop-Off Points (today’s flips from In Progress → Not Completed)
+    //    Simplest: count “Not Completed” entries created today
+    const { count: dropOffPoints } = await supabase
+      .from("userprogress")
+      .select("*", { count: "exact", head: true })
+      .eq("taskstatus", "Not Completed")
+      .gte("completion_date", todayISO);
+
+    // 4) Community / Help stats
+    const [
+      { count: helpRequestsToday },
+      { count: helpMessagesToday },
+      { count: helpRewardsToday },
+    ] = await Promise.all([
+      supabase
+        .from("help_chat_sessions")
+        .select("*", { count: "exact", head: true })
+        .gte("created_at", todayISO),
+      supabase
+        .from("help_chat_messages")
+        .select("*", { count: "exact", head: true })
+        .gte("created_at", todayISO),
+      supabase
+        .from("help_chat_messages")
+        .select("*", { count: "exact", head: true })
+        .gte("created_at", todayISO)
+        .eq("is_helpful", true),
+    ]);
+
+    // 5) Forgot-password rate (approx via reset_code usage in userprofile)
+    const { count: forgotPasswordCount } = await supabase
+      .from("userprofile")
+      .select("*", { count: "exact", head: true })
+      .not("reset_code", "is", null);
+
+    return res.json({
+      dau,
+      completedTasks,
+      notCompletedTasks,
+      dropOffPoints,
+      helpRequestsToday,
+      helpMessagesToday,
+      helpRewardsToday,
+      forgotPasswordCount,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error("fullAnalytics error:", err);
+    res.status(500).json({ error: "Failed to fetch full analytics" });
+  }
+});
+
+// ─── GET /api/admin/userSummary/:userid ────────────────────────────────
+app.get("/api/admin/userSummary/:userid", verifyToken, async (req, res) => {
+  const userId = req.params.userid;
+  if (!userId) return res.status(400).json({ error: "Missing user ID" });
+
+  try {
+    /* ------------------------------------------------------------------ */
+    /*  0)  CONSTANTS + HELPERS                                           */
+    /* ------------------------------------------------------------------ */
+    const today      = new Date(); today.setHours(0, 0, 0, 0);
+    const todayISO   = today.toISOString();
+    const safeArr    = (x) => (Array.isArray(x) ? x : []);
+
+    /* ------------------------------------------------------------------ */
+    /*  1)  PROFILE (gems, timezone, created_at)                          */
+    /* ------------------------------------------------------------------ */
+    const { data: userProfile, error: profErr } = await supabase
+      .from("userprofile")
+      .select("username,email,timezone,gems,created_at")
+      .eq("userid", userId)
+      .single();
+    if (profErr) throw profErr;
+
+    const userTZ = userProfile.timezone || "UTC";
+
+    /* ------------------------------------------------------------------ */
+    /*  2)  PROGRESS ROWS                                                 */
+    /* ------------------------------------------------------------------ */
+    const { data: rawProgress, error: progErr } = await supabase
+      .from("userprogress")
+      .select("taskstatus,completion_date,taskdetailsid,created_at")
+      .eq("userid", userId);
+    if (progErr) throw progErr;
+    const progress = safeArr(rawProgress);
+
+    const tasksCompleted     = progress.filter(p => p.taskstatus === "Completed").length;
+    const tasksNotCompleted  = progress.filter(p => p.taskstatus === "Not Completed").length;
+    const dropOffs           = progress
+      .filter(p => p.taskstatus === "Not Completed")
+      .map(p   => p.taskdetailsid);
+
+    /* ------------------------------------------------------------------ */
+    /*  3)  TODAY’S ACTIVITY FOR DAU FLAG                                 */
+    /* ------------------------------------------------------------------ */
+    const [{ count: progressToday }] = await Promise.all([
+      supabase
+        .from("userprogress")
+        .select("*", { head: true, count: "exact" })
+        .eq("userid", userId)
+        .gte("created_at", todayISO)
+    ]);
+
+    /* ------------------------------------------------------------------ */
+    /*  4)  HELP SESSIONS & MESSAGES                                      */
+    /* ------------------------------------------------------------------ */
+    const [
+      { data: rawHelpInitiated, error: hInitErr },
+      { data: rawHelpReceived,  error: hRecvErr },
+      { count: helpfulMessagesSent }
+    ] = await Promise.all([
+      supabase
+        .from("help_chat_sessions")
+        .select("id,created_at")
+        .eq("user_a", userId),
+      supabase
+        .from("help_chat_sessions")
+        .select("id,created_at")
+        .eq("user_b", userId),
+      supabase
+        .from("help_chat_messages")
+        .select("*", { head: true, count: "exact" })
+        .eq("sender_id", userId)
+        .eq("is_helpful", true)
+    ]);
+    if (hInitErr) throw hInitErr;
+    if (hRecvErr) throw hRecvErr;
+
+    const helpInitiated = safeArr(rawHelpInitiated);
+    const helpReceived  = safeArr(rawHelpReceived);
+
+    const helpToday =
+      helpInitiated.filter(h => h.created_at >= todayISO).length +
+      helpReceived .filter(h => h.created_at >= todayISO).length;
+
+    /* ------------------------------------------------------------------ */
+    /*  5)  STREAK CALC (current / longest / breaks)                      */
+    /* ------------------------------------------------------------------ */
+    const completedDays = [...new Set(
+      progress
+        .filter(p => p.taskstatus === "Completed" && p.completion_date)
+        .map(p => new Date(p.completion_date)
+          .toLocaleDateString("en-CA", { timeZone: userTZ })) // YYYY-MM-DD
+    )].sort();  // ascending
+
+    let currentStreak = 0, longestStreak = 0, streakBreaks = 0;
+    if (completedDays.length) {
+      let prev = null;
+      completedDays.forEach(day => {
+        if (!prev) {                       // first day
+          currentStreak = 1;
+        } else {
+          const gap = (new Date(day) - new Date(prev)) / 86_400_000;
+          if (gap === 1) {                 // consecutive
+            currentStreak++;
+          } else if (gap > 1) {            // break
+            longestStreak = Math.max(longestStreak, currentStreak);
+            streakBreaks++;
+            currentStreak = 1;
+          }
+        }
+        prev = day;
+      });
+      longestStreak = Math.max(longestStreak, currentStreak);
+
+      const todayStr = new Date().toLocaleDateString("en-CA", { timeZone: userTZ });
+      if (!completedDays.includes(todayStr)) currentStreak = 0;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  6)  MOST RECENT TASK                                              */
+    /* ------------------------------------------------------------------ */
+    const { data: lastRow } = await supabase
+      .from("userprogress")
+      .select("taskdetailsid")
+      .eq("userid", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+    const currentTask = lastRow?.taskdetailsid || null;
+
+
+        // ------------------------------------------------------------------
+    // 7)   FRIENDS  – how many *accepted* rows reference this user
+    // ------------------------------------------------------------------
+    const { count: friendsAdded } = await supabase
+      .from("friend_requests")
+      .select("*", { count: "exact", head: true })
+      .or(`from_user.eq.${userId},to_user.eq.${userId}`)
+      .eq("status", "accepted");
+
+    /* ------------------------------------------------------------------ */
+    /*  8)  RESPONSE                                                      */
+    /* ------------------------------------------------------------------ */
+    return res.json({
+      userProfile,
+      accountCreated   : userProfile.created_at,
+
+      isActiveToday    : (progressToday + helpToday) > 0,
+
+      currentStreak,
+      longestStreak,
+      streakBreaks,
+      currentTask,
+
+      stats: {
+        tasksCompleted,
+        tasksNotCompleted,
+        helpSent            : helpInitiated.length,
+        helpReceived        : helpReceived.length,
+        helpfulContributions: helpfulMessagesSent,
+        friendsAdded          : friendsAdded  
+      },
+
+      dropOffs,
+      gems: userProfile.gems || 0
+    });
+
+  } catch (err) {
+    console.error("userSummary error:", err);
+    res.status(500).json({ error: "Failed to fetch user summary", details: err.message });
+  }
+});
+
+
+app.get("/api/admin/nutritionStats", verifyToken, async (req, res) => {
+  try {
+    
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const todayISO = midnight.toISOString();
+
+    /* ---------------------------------------------------------------
+       1) “First-time” submissions today
+       --------------------------------------------------------------- */
+    const { count: firstTime } = await supabase
+      .from("user_nutrition")
+      .select("*", { head: true, count: "exact" })
+      .gte("created_at", todayISO)
+      .lte("updated_at", supabase.rpc("add_seconds", { ts: "created_at", s: 1 }));
+
+    /* ---------------------------------------------------------------
+       2) Edits today (updated_at ≥ today && updated_at > created_at)
+       --------------------------------------------------------------- */
+    const { count: updates } = await supabase
+      .from("user_nutrition")
+      .select("*", { head: true, count: "exact" })
+      .gte("updated_at", todayISO)
+      .gt("updated_at", "created_at");
+
+    /* ---------------------------------------------------------------
+       3) Distinct users who touched it today
+       --------------------------------------------------------------- */
+    const { count: activeUsersToday } = await supabase
+      .from("user_nutrition")
+      .select("userid", { head: true, count: "exact" })
+      .gte("updated_at", todayISO);
+
+    /* ---------------------------------------------------------------
+       4) Lifetime rows & distinct users  (to get avg uses / user)
+       --------------------------------------------------------------- */
+    const [
+      { count: totalRows },
+      { count: distinctUsers }
+    ] = await Promise.all([
+      supabase                           
+        .from("user_nutrition")
+        .select("*", { head: true, count: "exact" }),
+      supabase                           // distinct non-null users
+        .from("user_nutrition")
+        .select("userid", { head: true, count: "exact" })
+        .not("userid", "is", null)
+    ]);
+
+    const avgUsesPerUser =
+      distinctUsers ? (totalRows / distinctUsers).toFixed(2) : "0";
+
+    
+    return res.json({
+      firstTime,
+      updates,
+      activeUsersToday,
+      avgUsesPerUser,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error("nutritionStats error:", err);
+    res
+      .status(500)
+      .json({ error: "Failed to fetch nutrition stats", details: err.message });
+  }
+});
+
 
 // notifications
 app.post("/api/storeBeamsDevice", verifyToken, async (req, res) => {
