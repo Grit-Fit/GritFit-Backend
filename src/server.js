@@ -804,6 +804,126 @@ app.get("/api/admin/nutritionStats", verifyToken, async (req, res) => {
   }
 });
 
+app.post("/api/submitFeedback", verifyToken, async (req, res) => {
+  const { rating, comment } = req.body;
+  if (!rating || rating < 1 || rating > 5)
+    return res.status(400).json({ error: "Rating 1–5 required" });
+
+  try {
+    const { error } = await supabase
+      .from("mvp_feedback")
+      .insert({ userid: req.user.id, comment, rating });
+
+    if (error) throw error;
+    res.json({ ok: true });
+  } catch (err) {
+    console.error("submitFeedback:", err);
+    res.status(500).json({ error: "Could not save feedback" });
+  }
+});
+
+
+app.get("/api/admin/feedback", verifyToken, async (req, res) => {
+  try {
+    const ratingFilter = parseInt(req.query.rating, 10);        // optional
+    const base = supabase
+      .from("mvp_feedback")
+      .select(`
+        id,
+        rating,
+        comment,
+        submitted_at,
+        userprofile:userid ( username , email )
+      `)                             // ←  pulls username/email via FK
+      .order("submitted_at", { ascending: false });
+
+    const { data: rows, error } = Number.isInteger(ratingFilter)
+      ? await base.eq("rating", ratingFilter)
+      : await base;
+
+    if (error) throw error;
+
+    /*  build counts 1-5   */
+    const counts = [1,2,3,4,5].reduce((acc,n)=>{
+      acc[n] = rows.filter(r=>r.rating===n).length;
+      return acc;
+    }, {});
+
+    res.json({ rows, counts, ts: Date.now() });
+  } catch (err) {
+    console.error("feedback route error:", err);
+    res.status(500).json({ error: "Failed to fetch feedback", details: err.message });
+  }
+});
+
+// server.js  (inside your admin section)
+app.get("/api/admin/featureStats", verifyToken, async (req, res) => {
+  try {
+    const since = new Date();
+    since.setDate(since.getDate() - 30);                 // last 30 d
+    const sinceISO = since.toISOString();
+
+    // 1) pull raw rows
+    const { data: rows, error } = await supabase
+      .from("feature_events")
+      .select("feature, userid, duration_ms")
+      .gte("started_at", sinceISO);
+
+    if (error) throw error;
+
+    // 2) group + aggregate
+    const stats = {};
+    for (const r of rows) {
+      const f = r.feature;
+      stats[f] ??= { users: new Set(), durations: [] };
+      stats[f].users.add(r.userid);
+      stats[f].durations.push(r.duration_ms);
+    }
+
+    // helper: median
+    const median = arr => {
+      if (!arr.length) return 0;
+      const sorted = [...arr].sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 ? sorted[mid]
+                               : (sorted[mid-1] + sorted[mid]) / 2;
+    };
+
+    // 3) format for client
+    const out = Object.entries(stats).map(([feature, v]) => ({
+      feature,
+      uniqueUsers: v.users.size,
+      medianMs: median(v.durations),
+    }));
+
+    return res.json({ since: sinceISO, data: out });
+  } catch (err) {
+    console.error("featureStats error:", err);
+    res.status(500).json({ error: "Failed to fetch feature stats" });
+  }
+});
+
+app.get("/userStats", verifyToken, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("userprofile")
+      .select("current_streak")
+      .eq("userid", req.user.id)
+      .single();
+
+    if (error) throw error;
+    if (!data)  return res.status(404).json({ message: "Profile not found" });
+
+    return res.json(data);           
+  } catch (err) {
+    console.error("[userStats] Failed:", err);
+    return res.status(500).json({ message:"Failed to fetch user stats" });
+  }
+});
+
+
+
+
 
 // notifications
 app.post("/api/storeBeamsDevice", verifyToken, async (req, res) => {
@@ -2724,30 +2844,44 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
 
   try {
     let phaseId = parseInt(rawPhase, 10);
-    let taskId = parseInt(rawTask, 10);
+    let taskId  = parseInt(rawTask, 10);
 
     console.log("[userprogressC] Completing (phase=", phaseId, ", task=", taskId, ")");
 
-    // 1) Fetch user's time zone
-    const { data: userProfile, error: userProfileErr } = await supabase
+    /* ------------------------------------------------------------------ */
+    /* 1)  Fetch user profile (timezone + streak + gems)                  */
+    /* ------------------------------------------------------------------ */
+    const { data: profile, error: profileErr } = await supabase
       .from("userprofile")
-      .select("timezone")
+      .select(
+        "timezone, current_streak, longest_streak, last_completed, " +
+        "last_streak_reward, gems"
+      )
       .eq("userid", userId)
       .single();
 
-    if (userProfileErr) {
-      console.error("[userprogressC] Failed to fetch user timezone:", userProfileErr);
-      return res.status(500).json({ message: "Failed to fetch user timezone." });
+    if (profileErr) {
+      console.error("[userprogressC] Failed to fetch profile:", profileErr);
+      return res.status(500).json({ message: "Failed to fetch profile." });
     }
-    const userTz = userProfile?.timezone || "UTC";
-    console.log("[userprogressC] Using userTz =", userTz);
+    const {
+      timezone        = "UTC",
+      current_streak  = 0,
+      longest_streak  = 0,
+      last_completed  = null,
+      last_streak_reward = 0,
+      gems            = 0,
+    } = profile;
+    console.log("[userprogressC] Using userTz =", timezone);
 
-    // 2) Find current row in taskdetails
+    /* ------------------------------------------------------------------ */
+    /* 2)  Find current row in taskdetails                                */
+    /* ------------------------------------------------------------------ */
     const { data: currentTask, error: taskError } = await supabase
       .from("taskdetails")
       .select("*")
       .eq("phaseid", phaseId)
-      .eq("taskid", taskId)
+      .eq("taskid",  taskId)
       .single();
 
     if (taskError || !currentTask) {
@@ -2755,74 +2889,145 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(404).json({ message: "Current task not found" });
     }
 
-    // 3) Mark current task as Completed
+    /* ------------------------------------------------------------------ */
+    /* 3)  Mark current task as Completed                                 */
+    /* ------------------------------------------------------------------ */
     const { error: updateError } = await supabase
       .from("userprogress")
       .update({
-        taskstatus: "Completed",
-        completion_date: new Date().toISOString(),
+        taskstatus      : "Completed",
+        completion_date : new Date().toISOString(),
       })
       .eq("taskdetailsid", currentTask.taskdetailsid)
-      .eq("userid", userId);
+      .eq("userid",       userId);
 
     if (updateError) {
       console.error("[userprogressC] Error marking task completed:", updateError);
       return res.status(500).json({ message: "Failed to update task status." });
     }
 
-    // 4) Determine next day/phase
+    /* ------------------------------------------------------------------ */
+    /* 4)  🔥  STREAK UPDATE                                              */
+    /* ------------------------------------------------------------------ */
+    const todayYMD     = moment().tz(timezone).format("YYYY-MM-DD");
+    const yesterdayYMD = moment().tz(timezone).subtract(1, "day").format("YYYY-MM-DD");
+
+    let newCurrent  = current_streak;
+    let newLongest  = longest_streak;
+    let newRewarded = last_streak_reward;
+    let newGems     = gems;
+    let bonusGiven  = false;
+
+    if (last_completed === todayYMD) {
+      /* already counted today → leave streak unchanged */
+    } else if (last_completed === yesterdayYMD) {
+      newCurrent += 1;                         // continue streak
+    } else {
+      newCurrent  = 1;                         // reset
+    }
+    newLongest = Math.max(newLongest, newCurrent);
+
+    /* milestone every 7 days – adjust as you like */
+    const MILESTONE_DAYS = 4;
+    const MILESTONE_GEMS = 5;
+
+    if (newCurrent % MILESTONE_DAYS === 0 && newCurrent > newRewarded) {
+      newGems    += MILESTONE_GEMS;
+      newRewarded = newCurrent;
+      bonusGiven  = true;
+      console.log(`[streak] ${newCurrent}-day streak → +${MILESTONE_GEMS} gems`);
+    }
+
+    /* persist streak+gems */
+    const { error: streakErr } = await supabase
+      .from("userprofile")
+      .update({
+        current_streak    : newCurrent,
+        longest_streak    : newLongest,
+        last_completed    : todayYMD,
+        last_streak_reward: newRewarded,
+        gems              : newGems,
+      })
+      .eq("userid", userId);
+
+    if (streakErr) console.error("[userprogressC] Streak update failed:", streakErr);
+
+    /* ------------------------------------------------------------------ */
+    /* 5)  Determine next day / phase (unchanged)                         */
+    /* ------------------------------------------------------------------ */
     if (taskId < 5) {
       taskId += 1;
       console.log(`[userprogressC] Next day in same phase => (phase=${phaseId}, day=${taskId})`);
     } else {
       phaseId += 1;
-      taskId = 1;
+      taskId   = 1;
       console.log(`[userprogressC] Jumping to next phase => (phase=${phaseId}, day=1)`);
     }
 
-    // 5) Fetch nextTask
+    /* ------------------------------------------------------------------ */
+    /* 6)  Fetch nextTask                                                 */
+    /* ------------------------------------------------------------------ */
     const { data: nextTask, error: nextTaskError } = await supabase
       .from("taskdetails")
       .select("*")
       .eq("phaseid", phaseId)
-      .eq("taskid", taskId)
+      .eq("taskid",  taskId)
       .single();
 
     if (nextTaskError || !nextTask) {
       console.log("[userprogressC] No nextTask => all tasks done!");
-      return res.status(200).json({ message: "All tasks done" });
+      return res.status(200).json({
+        message        : "All tasks done",
+        current_streak : newCurrent,
+        longest_streak : newLongest,
+        gems           : newGems,
+        bonus_given    : bonusGiven,
+      });
     }
 
-    // 6) Compute tomorrow local midnight => convert => store in UTC
-    const nowInTz = moment().tz(userTz);
-    const tomorrowMidnightInTz = nowInTz.clone().add(1, "day").startOf("day");
-    const nextActivationDate = tomorrowMidnightInTz.utc().toDate();
+    /* ------------------------------------------------------------------ */
+    /* 7)  Schedule next task @ user’s next local midnight                */
+    /* ------------------------------------------------------------------ */
+    const nowInTz              = moment().tz(timezone);
+    const nextMidnightInTz     = nowInTz.clone().add(1, "day").startOf("day");
+    const nextActivationUTC    = nextMidnightInTz.utc().toDate();
+    console.log("[userprogressC] Scheduling next day for local midnight =>",
+                nextActivationUTC.toISOString());
 
-    console.log("[userprogressC] Scheduling next day for user local midnight =>", nextActivationDate.toISOString());
-
-    // 7) Insert next userprogress row
-    const { error: insertError } = await supabase
+    /* ------------------------------------------------------------------ */
+    /* 8)  Insert next userprogress row                                   */
+    /* ------------------------------------------------------------------ */
+    const { error: insertErr } = await supabase
       .from("userprogress")
       .insert({
-        userid: userId,
-        taskdetailsid: nextTask.taskdetailsid,
-        taskstatus: "Not Started",
-        task_activation_date: nextActivationDate.toISOString(),
-        created_at: new Date().toISOString(),
+        userid              : userId,
+        taskdetailsid       : nextTask.taskdetailsid,
+        taskstatus          : "Not Started",
+        task_activation_date: nextActivationUTC.toISOString(),
+        created_at          : new Date().toISOString(),
       });
 
-    if (insertError) {
-      console.error("[userprogressC] Error inserting next userprogress:", insertError);
+    if (insertErr) {
+      console.error("[userprogressC] Error inserting next userprogress:", insertErr);
       return res.status(500).json({ message: "Failed to insert next userprogress" });
     }
 
-    console.log(`[userprogressC] Inserted next day row => (phase=${phaseId}, task=${taskId}), activation=tomorrow local midnight`);
+    console.log(`[userprogressC] Inserted next day row ⇒ (phase=${phaseId}, task=${taskId}), activation=${nextActivationUTC.toISOString()}`);
+
+    /* ------------------------------------------------------------------ */
+    /* 9)  Respond                                                        */
+    /* ------------------------------------------------------------------ */
     return res.status(200).json({
-      message: "Task completed. Next day set to tomorrow's local midnight.",
+      message        : "Task completed. Next day scheduled.",
+      current_streak : newCurrent,
+      longest_streak : newLongest,
+      gems           : newGems,
+      bonus_given    : bonusGiven,
     });
-  } catch (error) {
-    console.error("[userprogressC] Error:", error);
-    return res.status(500).json({ error: error.message });
+
+  } catch (err) {
+    console.error("[userprogressC] Error:", err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
