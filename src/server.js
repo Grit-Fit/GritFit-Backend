@@ -2071,7 +2071,7 @@ app.post("/api/restartJourney", verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    // 1) Delete userprogress rows for this user
+    /* 1️⃣  Delete all progress rows for this user */
     const { error: progressError } = await supabase
       .from("userprogress")
       .delete()
@@ -2082,18 +2082,31 @@ app.post("/api/restartJourney", verifyToken, async (req, res) => {
       return res.status(500).json({ message: "Failed to restart journey" });
     }
 
-    // 2) Optionally reset other tables, like user_nutrition or user_achievements
-    //    if you want them truly “fresh”
-    // await supabase.from("user_nutrition").delete().eq("userid", userId);
-    // or you might just do partial updates, etc.
+    /* 2️⃣  Reset the streak */
+    const { error: streakErr } = await supabase
+      .from("userprofile")
+      .update({
+        current_streak : 0,
+        last_completed : null,     // optional but recommended
+      })
+      .eq("userid", userId);
 
-    // 3) Return success
-    return res.status(200).json({ message: "Journey restarted, progress cleared" });
+    if (streakErr) {
+      console.error("Error resetting streak:", streakErr);
+      return res.status(500).json({ message: "Failed to reset streak" });
+    }
+
+    /* 3️⃣  (Optional) wipe other per‑user tables here … */
+    // await supabase.from("user_nutrition").delete().eq("userid", userId);
+
+    /* 4️⃣  Success */
+    return res.status(200).json({ message: "Journey restarted; progress & streak cleared." });
   } catch (error) {
     console.error("Restart journey error:", error);
     return res.status(500).json({ message: "Server error restarting journey" });
   }
 });
+
 
 
 // Utility: generate 4-digit OTP
