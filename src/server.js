@@ -921,6 +921,113 @@ app.get("/userStats", verifyToken, async (req, res) => {
   }
 });
 
+app.post("/api/feedback", verifyToken, async (req, res) => {
+  try {
+    const { feature, rating, comment = "" } = req.body;
+    const userid = req.user.id;
+    const ratingNum = Number(rating);
+
+    if (!feature || !ratingNum) {
+      return res.status(400).json({ error: "feature & rating required" });
+    }
+    if (ratingNum < 1 || ratingNum > 5) {
+      return res.status(400).json({ error: "rating must be 1‑5" });
+    }
+
+    const { error } = await supabase
+      .from("user_feedback")
+      .insert({ userid, feature, rating: ratingNum, comment });
+
+    if (error) throw error;
+    return res.status(201).json({ ok: true });
+  } catch (err) {
+    console.error("POST /feedback error:", err);
+    res.status(500).json({ error: "Failed to save feedback" });
+  }
+});
+
+/*********************************************************************/
+/*  2)  ADMIN – COMPONENT FEEDBACK (user_feedback)                    */
+/*      – Dashboard “Component Feedback” card                         */
+/*      – Per‑user feedback in summary modal                          */
+/*********************************************************************/
+app.get("/api/admin/componentFeedback", verifyToken, async (req, res) => {
+  try {
+    const { userId, feature } = req.query;
+
+    let q = supabase
+      .from("user_feedback")
+      .select(
+        `id,
+         userid,
+         feature,
+         rating,
+         comment,
+         submitted_at,
+         userprofile:userprofile(username,email)`
+      );
+
+    if (userId) q = q.eq("userid", userId);
+    if (feature) q = q.eq("feature", feature);
+
+    const { data, error } = await q.order("submitted_at", { ascending: false });
+    if (error) throw error;
+
+    /* When called without userId we also send an object that groups
+       feedback by feature so the dashboard can show counts quickly. */
+    if (!userId) {
+      const grouped = {};
+      data.forEach((row) => {
+        (grouped[row.feature] = grouped[row.feature] || []).push(row);
+      });
+      return res.json({ rows: data, countsByFeature: grouped });
+    }
+
+    // user‑specific request: just rows
+    res.json({ rows: data });
+  } catch (err) {
+    console.error("GET /admin/componentFeedback error:", err);
+    res.status(500).json({ error: "Failed to fetch component feedback" });
+  }
+});
+
+/*********************************************************************/
+/*  3)  ADMIN – APP‑LEVEL REVIEWS (mvp_feedback)                      */
+/*      – Dashboard “App Reviews” card                                */
+/*********************************************************************/
+app.get("/api/admin/mvpFeedback", verifyToken, async (req, res) => {
+  try {
+    const { feature, userId, rating } = req.query;
+
+    let q = supabase
+      .from("mvp_feedback")
+      .select(
+        `id,
+         userid,
+         rating,
+         comment,
+         submitted_at,
+         userprofile:userprofile(username,email)`
+      );
+
+
+    if (userId)  q = q.eq("userid", userId);
+    if (rating)  q = q.eq("rating", Number(rating));
+
+    const { data, error } = await q.order("submitted_at", { ascending: false });
+    if (error) throw error;
+
+    // quick rating histogram for the dashboard
+    const counts = { 1:0, 2:0, 3:0, 4:0, 5:0 };
+    data.forEach((r) => (counts[r.rating] = (counts[r.rating] || 0) + 1));
+
+    res.json({ rows: data, counts });
+  } catch (err) {
+    console.error("GET /admin/mvpFeedback error:", err);
+    res.status(500).json({ error: "Failed to fetch app reviews" });
+  }
+});
+
 
 
 
