@@ -3151,6 +3151,66 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
   }
 });
 
+// =========  SHADOW  SWIPE  (analytics-only + gem reward)  =========
+app.post("/api/logShadowSwipe", verifyToken, async (req, res) => {
+  const userId = req.user.id;
+  const { taskdetailsId, swipeDirection, reason = null } = req.body;
+
+  // Validate input
+  if (!taskdetailsId || !['left', 'right', 'up'].includes(swipeDirection)) {
+    return res.status(400).json({ error: "Missing or invalid fields." });
+  }
+
+  try {
+    // 1️⃣ Log the shadow swipe
+    const { error: insertError } = await supabase
+      .from("shadow_swipes")
+      .insert([{
+        userid: userId,
+        taskdetailsid: taskdetailsId,
+        swipe_direction: swipeDirection,
+        reason: reason || null
+      }]);
+
+    if (insertError) {
+      console.error("Failed to insert shadow swipe:", insertError);
+      return res.status(500).json({ error: "Could not log shadow swipe." });
+    }
+
+    // 2️⃣ Reward +5 gems if swipeDirection === "right"
+    if (swipeDirection === "right") {
+      const { data: profile, error: profileError } = await supabase
+        .from("userprofile")
+        .select("gems")
+        .eq("userid", userId)
+        .single();
+
+      if (!profileError && profile?.gems !== undefined) {
+        const newGems = profile.gems + 5;
+
+        const { error: updateError } = await supabase
+          .from("userprofile")
+          .update({ gems: newGems })
+          .eq("userid", userId);
+
+        if (updateError) {
+          console.warn("Gems update failed:", updateError);
+          // Don't return error — reward is optional
+        }
+      } else {
+        console.warn("Could not fetch user gems:", profileError);
+      }
+    }
+
+    return res.status(200).json({ message: "Shadow swipe logged successfully." });
+
+  } catch (err) {
+    console.error("Unexpected error in shadow swipe route:", err);
+    return res.status(500).json({ error: "Server error while logging shadow swipe." });
+  }
+});
+
+
 
 
 // Logout endpoint
