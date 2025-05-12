@@ -2612,28 +2612,36 @@ app.get("/api/getUserProfile", verifyToken, async (req, res) => {
 app.post("/api/getUserProgress", verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
+
+    // 1️⃣ Fetch normal progress data
     const { data: userProgressData, error: checkError } = await supabase
       .from("userprogress")
       .select("*")
       .eq("userid", userId)
       .order("created_at", { ascending: false });
 
-   
     if (checkError && checkError?.code !== "PGRST116") {
       throw checkError;
     }
 
-   
-    if (!userProgressData || userProgressData.length === 0) {
-      return res.status(404).json({
-        message: "No progress entry found for this user",
-      });
+    // 2️⃣ Fetch shadow swipe data (only LEFT swipes with a reason)
+    const { data: shadowSwipes, error: shadowErr } = await supabase
+      .from("shadow_swipes")
+      .select("reason")
+      .eq("userid", userId)
+      .eq("swipe_direction", "left")
+      .not("reason", "is", null);
+
+    if (shadowErr) {
+      console.warn("Shadow swipe fetch failed:", shadowErr);
     }
 
     return res.status(200).json({
       message: "User Progress Data retrieved successfully",
       data: userProgressData,
+      shadowSwipes: shadowSwipes || [],  // return empty array if error
     });
+
   } catch (error) {
     return res.status(error.status || 500).json({
       message: "Error retrieving the taskData.",
@@ -2641,6 +2649,7 @@ app.post("/api/getUserProgress", verifyToken, async (req, res) => {
     });
   }
 });
+
 
 
 app.post("/api/getTaskData", verifyToken, async (req, res) => {
