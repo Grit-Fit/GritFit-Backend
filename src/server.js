@@ -1957,6 +1957,54 @@ app.get("/api/getTaskById/:id", async (req, res) => {
   }
 });
 
+app.post("/api/awardGems", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { amount = 0, reason = "unspecified" } = req.body;
+
+    if (typeof amount !== "number" || amount <= 0) {
+      return res.status(400).json({ error: "Invalid gem amount" });
+    }
+
+    // 1. Fetch current gems
+    const { data: profile, error: fetchErr } = await supabase
+      .from("userprofile")
+      .select("gems")
+      .eq("userid", userId)
+      .single();
+
+    if (fetchErr || !profile) {
+      console.error("awardGems: fetch error", fetchErr);
+      return res.status(500).json({ error: "Failed to fetch user gems" });
+    }
+
+    const currentGems = profile.gems || 0;
+    const newGemCount = currentGems + amount;
+
+    // 2. Update gems
+    const { error: updateErr } = await supabase
+      .from("userprofile")
+      .update({ gems: newGemCount })
+      .eq("userid", userId);
+
+    if (updateErr) {
+      console.error("awardGems: update error", updateErr);
+      return res.status(500).json({ error: "Failed to update gems" });
+    }
+
+    return res.json({
+      success: true,
+      message: `Awarded ${amount} gems for: ${reason}`,
+      newGems: newGemCount,
+    });
+
+  } catch (err) {
+    console.error("awardGems server error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
 
 
 
