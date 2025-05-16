@@ -11,6 +11,10 @@ const fs = require("fs");
 const path = require("path");
 const nodemailer = require("nodemailer");
 
+const validator = require("validator");
+const xss = require("xss");
+const fetch = require("node-fetch");
+
 
 
 dotenv.config();
@@ -2060,6 +2064,116 @@ app.post("/api/betaSignup", async (req, res) => {
   }
 });
 
+const { getZohoAccessToken } = require("./zohoToken");
+
+function localTicketRef() {
+  return Math.floor(1000 + Math.random() * 9000).toString(); // for fallback only
+}
+
+app.post("/api/supportTicket", verifyToken, async (req, res) => {
+  const userId = req.user.id;
+  let { subject = "", description = "" } = req.body;
+
+  /* 1️⃣  Sanitize input (XSS-safe) */
+  subject     = validator.trim(validator.escape(subject)).slice(0, 120);
+  description = xss(description, { whiteList: {} }).slice(0, 5000);
+
+  if (!subject || !description)
+    return res.status(400).json({ error: "Subject & message required" });
+
+  try {
+    /* 2️⃣  Fetch user info */
+    const { data: user, error: userErr } = await supabase
+      .from("userprofile")
+      .select("email, username")
+      .eq("userid", userId)
+      .single();
+    if (userErr || !user) throw userErr || new Error("User not found");
+
+    /* 3️⃣  Create Zoho Desk ticket FIRST */
+    const accessToken = await getZohoAccessToken();
+    const deskResp = await fetch(
+      `https://desk.zoho.com/api/v1/tickets?orgId=${process.env.ZOHO_ORG_ID}`,
+      {
+        method : "POST",
+        headers: {
+          Authorization: `Zoho-oauthtoken ${accessToken}`,
+          "Content-Type": "application/json;charset=utf-8"
+        },
+        body: JSON.stringify({
+          subject     : `[GritFit] ${subject}`,
+          departmentId: process.env.ZOHO_DEPT_ID,
+          contact     : { email: user.email, lastName: user.username || "User" },
+          description
+        })
+      }
+    );
+
+    if (!deskResp.ok) {
+      const txt = await deskResp.text();
+      console.error("Zoho Desk error:", txt);
+      return res.status(502).json({ error: "Zoho Desk rejected ticket" });
+    }
+
+    const deskJson = await deskResp.json();
+    const ticketNo = deskJson.ticketNumber?.toString() || localTicketRef(); // fallback
+    const ticketId = deskJson.id;
+
+    /* 4️⃣  Store in your own table */
+    await supabase.from("support_tickets").insert({
+      userid     : userId,
+      ticket_no  : ticketNo,
+      subject,
+      description,
+      zoho_id    : ticketId
+    });
+
+    /* 5️⃣  Send acknowledgement email (HTML + text) */
+    const plainText = `
+Hi ${user.username || "there"},
+
+Thanks for reaching out! We’ve opened a support ticket for you.
+
+Ticket ID : ${ticketNo}
+Subject   : ${subject}
+
+We’ll get back to you as soon as possible.
+Have a great day!
+
+— The GritFit Support Team
+`;
+
+    const htmlBody = `
+<p>Hi ${user.username || "there"},</p>
+<p>Thanks for reaching out! We’ve opened a support ticket for you.</p>
+
+<table style="border-collapse:collapse">
+  <tr><td style="padding:4px 8px"><strong>Ticket&nbsp;ID:</strong></td><td>${ticketNo}</td></tr>
+  <tr><td style="padding:4px 8px"><strong>Subject:</strong></td><td>${validator.escape(subject)}</td></tr>
+</table>
+
+<p>We’ll get back to you as soon as possible.<br>
+Have a great day!</p>
+
+<p style="margin-top:24px">— The <strong>GritFit Support</strong> Team</p>
+`;
+
+    await transporter.sendMail({
+      from   : process.env.ZOHO_USER,
+      to     : user.email,
+      subject: `GritFit Support • Ticket #${ticketNo}`,
+      text   : plainText,
+      html   : htmlBody
+    });
+
+    return res.json({ ok: true, ticketNo });
+  } catch (err) {
+    console.error("supportTicket error:", err);
+    return res.status(500).json({ error: "Could not create support ticket" });
+  }
+});
+
+
 
 // saveUserNutrition
 app.post("/api/saveUserNutrition", verifyToken, async (req, res) => {
@@ -3038,18 +3152,12 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       .single();
 
     if (profileErr) {
-      console.error("[userprogressC] Failed to fetch profile:", profileErr);
-      return res.status(500).json({ message: "Failed to fetch profile." });
+      console.error("[userprogressC] Failed to fetch user profile:", profileErr);
+      return res.status(500).json({ message: "Failed to fetch user profile." });
     }
-    const {
-      timezone        = "UTC",
-      current_streak  = 0,
-      longest_streak  = 0,
-      last_completed  = null,
-      last_streak_reward = 0,
-      gems            = 0,
-    } = profile;
-    console.log("[userprogressC] Using userTz =", timezone);
+
+    const userTz = profile.timezone || "UTC";
+    console.log("[userprogressC] Using userTz =", userTz);
 
     /* ------------------------------------------------------------------ */
     /* 2)  Find current row in taskdetails                                */
@@ -3083,51 +3191,121 @@ app.post("/api/userprogressC", verifyToken, async (req, res) => {
       return res.status(500).json({ message: "Failed to update task status." });
     }
 
-    /* ------------------------------------------------------------------ */
-    /* 4)  🔥  STREAK UPDATE                                              */
-    /* ------------------------------------------------------------------ */
-    const todayYMD     = moment().tz(timezone).format("YYYY-MM-DD");
-    const yesterdayYMD = moment().tz(timezone).subtract(1, "day").format("YYYY-MM-DD");
+            // test
 
-    let newCurrent  = current_streak;
-    let newLongest  = longest_streak;
-    let newRewarded = last_streak_reward;
-    let newGems     = gems;
-    let bonusGiven  = false;
+        /* =====================================================================
+          GEM-REWARD  +  STREAK  SECTION  (replace your current block with this)
+          ===================================================================== */
 
-    if (last_completed === todayYMD) {
-      /* already counted today → leave streak unchanged */
-    } else if (last_completed === yesterdayYMD) {
-      newCurrent += 1;                         // continue streak
-    } else {
-      newCurrent  = 1;                         // reset
-    }
-    newLongest = Math.max(newLongest, newCurrent);
+        /* pull existing data from the profile we already fetched */
+        let {
+          current_streak     = 0,
+          longest_streak     = 0,
+          last_completed     = null,
+          last_streak_reward = 0,
+          gems               = profile.gems || 0       //  <- SINGLE source of truth
+        } = profile;
 
-    /* milestone every 7 days – adjust as you like */
-    const MILESTONE_DAYS = 4;
-    const MILESTONE_GEMS = 5;
+        let rewardedThisCall = false;                  // useful for the response
 
-    if (newCurrent % MILESTONE_DAYS === 0 && newCurrent > newRewarded) {
-      newGems    += MILESTONE_GEMS;
-      newRewarded = newCurrent;
-      bonusGiven  = true;
-      console.log(`[streak] ${newCurrent}-day streak → +${MILESTONE_GEMS} gems`);
-    }
+        /* ────────────────────────────────────────────────
+          1.  +5 gems for completing Task-1 of Phase-1
+        ────────────────────────────────────────────────── */
+        if (phaseId === 1 && taskId === 1) {
+          gems += 5;
+          rewardedThisCall = true;
+          console.log(`[GEMS] +5 for Task 1 Phase 1  (total → ${gems})`);
+        }
 
-    /* persist streak+gems */
-    const { error: streakErr } = await supabase
-      .from("userprofile")
-      .update({
-        current_streak    : newCurrent,
-        longest_streak    : newLongest,
-        last_completed    : todayYMD,
-        last_streak_reward: newRewarded,
-        gems              : newGems,
-      })
-      .eq("userid", userId);
+        /* ────────────────────────────────────────────────
+          2.  Work out nextPhaseId (is this the last task?)
+        ────────────────────────────────────────────────── */
+        const { data: tasks, error: taskErr } = await supabase
+          .from("taskdetails")
+          .select("taskid")
+          .eq("phaseid", phaseId);
 
-    if (streakErr) console.error("[userprogressC] Streak update failed:", streakErr);
+        if (taskErr || !tasks) {
+          console.error("[userprogressC] taskdetails fetch failed:", taskErr);
+          return res.status(500).json({ error: "Could not determine phase boundary" });
+        }
+
+        const maxTaskId   = Math.max(...tasks.map(t => t.taskid));
+        const isLastTask  = taskId === maxTaskId;
+        const nextPhaseId = isLastTask ? phaseId + 1 : phaseId;
+
+        /* ────────────────────────────────────────────────
+          3.  +10 gems for unlocking Phase 2
+        ────────────────────────────────────────────────── */
+        if (nextPhaseId === 2) {
+          gems += 10;
+          rewardedThisCall = true;
+          console.log(`[GEMS] +10 for unlocking Phase 2  (total → ${gems})`);
+        }
+
+        /* ────────────────────────────────────────────────
+          4.  +10 gems for unlocking Phase 3
+        ────────────────────────────────────────────────── */
+        if (nextPhaseId === 3) {
+          gems += 10;
+          rewardedThisCall = true;
+          console.log(`[GEMS] +10 for unlocking Phase 3  (total → ${gems})`);
+        }
+
+        /* ────────────────────────────────────────────────
+          5.  STREAK logic  (unchanged except it now bumps `gems`)
+        ────────────────────────────────────────────────── */
+        const formatYMD = ms =>
+          new Date(ms).toLocaleDateString("en-CA", { timeZone: userTz });  // e.g. 2025-04-29
+
+        const today     = formatYMD(Date.now());
+        const yesterday = formatYMD(Date.now() - 86_400_000);
+
+        if (last_completed === today) {
+          /* already logged today → streak unchanged */
+        } else if (last_completed === yesterday) {
+          current_streak += 1;
+        } else {
+          current_streak  = 0;
+        }
+
+        longest_streak = Math.max(longest_streak, current_streak);
+
+        /* give 10 gems every 4-day streak (same numbers you had) */
+        const MILESTONE_DAYS = 4;
+        const MILESTONE_GEMS = 10;
+
+        if (
+          current_streak % MILESTONE_DAYS === 0 &&
+          current_streak > 0 &&
+          current_streak > last_streak_reward
+        ) {
+          gems += MILESTONE_GEMS;
+          last_streak_reward = current_streak;
+          rewardedThisCall   = true;
+          console.log(
+            `[streak] ${current_streak}-day streak → +${MILESTONE_GEMS} gems  (total → ${gems})`
+          );
+        }
+
+        /* ────────────────────────────────────────────────
+          6.  Persist streak **and final gems**  (one write)
+        ────────────────────────────────────────────────── */
+        const { error: streakErr } = await supabase
+          .from("userprofile")
+          .update({
+            current_streak,
+            longest_streak,
+            last_completed     : today,
+            last_streak_reward,
+            gems                               // final value
+          })
+          .eq("userid", userId);
+
+        if (streakErr) {
+          console.error("[userprogressC] Error updating streak/gems:", streakErr);
+          // (don’t fail the whole route — keep going)
+        }
 
     /* ------------------------------------------------------------------ */
     /* 5)  Determine next day / phase (unchanged)                         */
