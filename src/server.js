@@ -2074,7 +2074,6 @@ app.post("/api/supportTicket", verifyToken, async (req, res) => {
   const userId = req.user.id;
   let { subject = "", description = "" } = req.body;
 
-  /* 1️⃣  Sanitize input (XSS-safe) */
   subject     = validator.trim(validator.escape(subject)).slice(0, 120);
   description = xss(description, { whiteList: {} }).slice(0, 5000);
 
@@ -2082,53 +2081,30 @@ app.post("/api/supportTicket", verifyToken, async (req, res) => {
     return res.status(400).json({ error: "Subject & message required" });
 
   try {
-    /* 2️⃣  Fetch user info */
+    // 1. Fetch user details
     const { data: user, error: userErr } = await supabase
       .from("userprofile")
       .select("email, username")
       .eq("userid", userId)
       .single();
+
     if (userErr || !user) throw userErr || new Error("User not found");
 
-    /* 3️⃣  Create Zoho Desk ticket FIRST */
-    const accessToken = await getZohoAccessToken();
-    const deskResp = await fetch(
-      `https://desk.zoho.com/api/v1/tickets?orgId=${process.env.ZOHO_ORG_ID}`,
-      {
-        method : "POST",
-        headers: {
-          Authorization: `Zoho-oauthtoken ${accessToken}`,
-          "Content-Type": "application/json;charset=utf-8"
-        },
-        body: JSON.stringify({
-          subject     : `[GritFit] ${subject}`,
-          departmentId: process.env.ZOHO_DEPT_ID,
-          contact     : { email: user.email, lastName: user.username || "User" },
-          description
-        })
-      }
-    );
+    // 2. Generate local ticket number
+    const ticketNo = localTicketRef();
 
-    if (!deskResp.ok) {
-      const txt = await deskResp.text();
-      console.error("Zoho Desk error:", txt);
-      return res.status(502).json({ error: "Zoho Desk rejected ticket" });
-    }
-
-    const deskJson = await deskResp.json();
-    const ticketNo = deskJson.ticketNumber?.toString() || localTicketRef(); // fallback
-    const ticketId = deskJson.id;
-
-    /* 4️⃣  Store in your own table */
-    await supabase.from("support_tickets").insert({
+    // 3. Insert into your DB
+    const { error: dbErr } = await supabase.from("support_tickets").insert({
       userid     : userId,
       ticket_no  : ticketNo,
+      email      : user.email,
       subject,
-      description,
-      zoho_id    : ticketId
+      description
     });
 
-    /* 5️⃣  Send acknowledgement email (HTML + text) */
+    if (dbErr) throw dbErr;
+
+    // 4. Email the user (same as forgotPassword)
     const plainText = `
 Hi ${user.username || "there"},
 
@@ -2158,13 +2134,14 @@ Have a great day!</p>
 <p style="margin-top:24px">— The <strong>GritFit Support</strong> Team</p>
 `;
 
-    await transporter.sendMail({
-      from   : process.env.ZOHO_USER,
-      to     : user.email,
-      subject: `GritFit Support • Ticket #${ticketNo}`,
-      text   : plainText,
-      html   : htmlBody
-    });
+  await transporter.sendMail({
+    from   : process.env.ZOHO_USER,
+    to     : user.email,
+    subject: `GritFit Support • Ticket #${ticketNo}`,
+    text   : plainText,
+    html   : htmlBody
+  });
+    console.log(`[MAIL] Sent support ticket email to ${user.email}`);
 
     return res.json({ ok: true, ticketNo });
   } catch (err) {
@@ -2173,6 +2150,66 @@ Have a great day!</p>
   }
 });
 
+
+app.get("/api/whatsNew", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("whats_new")
+      .select("key, title, bullets")
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+    if (!data || data.length === 0) return res.json(null);
+
+    return res.json(data[0]);
+  } catch (err) {
+    console.error("GET /api/whatsNew error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/whatsNewList", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from("whats_new")
+      .select("key, title, bullets, created_at")
+      .order("created_at", { ascending: false });
+    if (error) throw error;
+    res.json(data);
+  } catch (err) {
+    console.error("GET /api/whatsNewList error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/onboardingAnswers", verifyToken, async (req, res) => {
+  const userid    = req.user.id;
+  const { answers } = req.body;        // expect a plain object
+
+  if (typeof answers !== "object" || Array.isArray(answers))
+    return res.status(400).json({ error: "Invalid payload" });
+
+  try {
+    const { data: profile, error } = await supabase
+      .from("userprofile")
+      .select("email")
+      .eq("userid", userid)
+      .single();
+    if (error || !profile) throw error || new Error("User not found");
+
+    // upsert keeps the row idempotent
+    const { error: upErr } = await supabase
+      .from("onboarding_answers")
+      .upsert({ userid, email: profile.email, answers });
+    if (upErr) throw upErr;
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("onboardingAnswers error:", err);
+    return res.status(500).json({ error: err.message });
+  }
+});
 
 
 // saveUserNutrition
