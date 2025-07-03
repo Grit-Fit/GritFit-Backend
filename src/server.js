@@ -2377,41 +2377,43 @@ app.post("/api/restartJourney", verifyToken, async (req, res) => {
   try {
     const userId = req.user.id;
 
-    /* 1️⃣  Delete all progress rows for this user */
+    // 1️⃣ Delete all progress rows
     const { error: progressError } = await supabase
       .from("userprogress")
       .delete()
       .eq("userid", userId);
+    if (progressError) throw progressError;
 
-    if (progressError) {
-      console.error("Error restarting journey:", progressError);
-      return res.status(500).json({ message: "Failed to restart journey" });
-    }
+    // 2️⃣ Delete all shadow-swipe rows (pie chart “Other” data)
+    const { error: shadowError } = await supabase
+      .from("shadow_swipes")
+      .delete()
+      .eq("userid", userId);
+    if (shadowError) throw shadowError;
 
-    /* 2️⃣  Reset the streak */
+    // 3️⃣ Reset the streak
     const { error: streakErr } = await supabase
       .from("userprofile")
       .update({
-        current_streak : 0,
-        last_completed : null,     // optional but recommended
+        current_streak: 0,
+        last_completed: null,
       })
       .eq("userid", userId);
+    if (streakErr) throw streakErr;
 
-    if (streakErr) {
-      console.error("Error resetting streak:", streakErr);
-      return res.status(500).json({ message: "Failed to reset streak" });
-    }
+    // 4️⃣ (Optional) wipe other per-user tables here …
 
-    /* 3️⃣  (Optional) wipe other per‑user tables here … */
-    // await supabase.from("user_nutrition").delete().eq("userid", userId);
-
-    /* 4️⃣  Success */
-    return res.status(200).json({ message: "Journey restarted; progress & streak cleared." });
+    return res
+      .status(200)
+      .json({ message: "Journey restarted; all data cleared." });
   } catch (error) {
     console.error("Restart journey error:", error);
-    return res.status(500).json({ message: "Server error restarting journey" });
+    return res
+      .status(500)
+      .json({ message: "Server error restarting journey" });
   }
 });
+
 
 
 
